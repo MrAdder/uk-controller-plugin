@@ -52,7 +52,7 @@ jobs:
           CURL_DOWNLOAD_URL: "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip"
           CURL_VERSION: 7.76.1
         run: |
-          New-Item -Path "C:\\hostedtoolcache\\windows" -Name "libcurl" -ItemType "directory"
+          New-Item -Path "C:\\hostedtoolcache\\windows" -Name "libcurl" -ItemType "directory" -Force | Out-Null
           $WebClient = New-Object System.Net.WebClient
           $WebClient.DownloadFile(${env:CURL_DOWNLOAD_URL}, "C:\\hostedtoolcache\\windows\\libcurl\\curl.zip")
           Set-Location -Path "C:\\hostedtoolcache\\windows\\libcurl"
@@ -144,7 +144,7 @@ jobs:
           path: build
 
   # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, static libcurl) -----------
-    linux-cross:
+  linux-cross:
     name: Linux Cross-Build (Win32 via llvm-mingw, no Docker)
     runs-on: ubuntu-24.04
     env:
@@ -191,23 +191,6 @@ jobs:
         run: |
           sudo mkdir -p /opt/llvm-mingw
           sudo tar -xJf "$HOME/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}" -C /opt/llvm-mingw --strip-components=1
-          ls -l /opt/llvm-mingw/bin
-
-      - name: Add llvm-mingw to PATH
-        run: echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
-
-      - name: Cache llvm-mingw extracted
-        id: cache-llvm-extract
-        uses: actions/cache@v4
-        with:
-          path: /opt/llvm-mingw
-          key: llvm-mingw-extract-${{ env.LLVM_MINGW_VERSION }}
-
-      - name: Extract llvm-mingw (if needed)
-        if: steps.cache-llvm-extract.outputs.cache-hit != 'true'
-        run: |
-          sudo mkdir -p /opt/llvm-mingw
-          sudo tar -xJf ~/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE} -C /opt/llvm-mingw --strip-components=1
           ls -l /opt/llvm-mingw/bin
 
       - name: Add llvm-mingw to PATH
@@ -299,7 +282,8 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ukcp-build-tree-cross
-        # Unpack/restore straight into ./build for ctest discovery
+          path: ukcp-build-tree-cross
+
       - name: Move build tree into place
         run: |
           if not exist build mkdir build
@@ -393,13 +377,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: UKControllerPluginUpdater.dll
-          path: ".\\build\\bin\\UKControllerPluginUpdater.dll"
-
+        #  path is a directory, not a file path; keep default and move later if needed
       - name: Download Loader Binary
         uses: actions/download-artifact@v4
         with:
           name: UKControllerPlugin.dll
-          path: ".\\build\\bin\\UKControllerPlugin.dll"
 
       - name: Create Release
         env:
