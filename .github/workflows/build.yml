@@ -40,7 +40,7 @@ jobs:
 
       - name: Install xwin SDK (if needed)
         env:
-            XWIN_VERSION: 0.6.5                 # pin a known-good version
+            XWIN_VERSION: 0.6.7                 # pin a known-good version
         run: |
           set -e
           if [ ! -d "/opt/xwin" ]; then
