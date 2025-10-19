@@ -21,7 +21,7 @@ jobs:
         with:
           submodules: recursive
 
-      # Environment things
+      # Ensure VC++ 2010 Redistributables (x86 + x64)
       - name: Install VC++ 2010 Redistributables (x86 and x64)
         run: |
           choco install vcredist2010 --yes
@@ -38,7 +38,7 @@ jobs:
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
 
-      # cURL
+      # Cache cURL build to speed up CI
       - name: Cache cURL
         id: cache-curl
         uses: actions/cache@v4
@@ -68,7 +68,7 @@ jobs:
           echo "CURL_INCLUDEDIR=C:\\hostedtoolcache\\windows\\libcurl\\curl-${env:CURL_VERSION}\\builds\\libcurl-vc-x86-release-static-ipv6-sspi-schannel\\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CURL_LIBRARYDIR=C:\\hostedtoolcache\\windows\\libcurl\\curl-${env:CURL_VERSION}\\builds\\libcurl-vc-x86-release-static-ipv6-sspi-schannel\\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      # Setup all the yarn things and node modules
+      # Setup Yarn + caches
       - name: Setup Yarn
         uses: actions/setup-node@v4
         with:
@@ -93,7 +93,6 @@ jobs:
           path: "**/node_modules"
           key: ${{ runner.os }}-node-modules-${{ hashFiles('**/yarn.lock') }}
 
-      # Install yarn things
       - name: Install Assets
         run: yarn
 
@@ -110,7 +109,6 @@ jobs:
           CXXFLAGS: -m32
         run: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -G Ninja -Bbuild
 
-      # Run the build and tests
       - name: Run Ninja Build
         working-directory: build
         run: ninja
@@ -118,23 +116,9 @@ jobs:
       - name: Run Tests
         working-directory: build
         run: |
-          ctest -C Release --output-on-failure --no-tests=error
+          ctest --output-on-failure --no-tests=error
 
-      # Do Srclinting
-      - name: Get Changed Files (Src)
-        id: changed-files-src
-        uses: Ana06/get-changed-files@v2.3.0
-        with:
-          filter: |
-            src/**/*.cpp
-
-      - name: Clang Tidy (Src)
-        continue-on-error: true # Have to as clang-tidy doesnt want to run properly on Windows
-        if: false
-        run: |
-          if (-not ([string]::IsNullOrEmpty("${{ steps.changed-files-src.outputs.added_modified }}"))) { clang-tidy ${{ steps.changed-files-src.outputs.added_modified }} -p build }
-
-      # Upload artifacts (DLLs as before)
+      # Upload artifacts
       - name: Upload Core Binary As Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -153,113 +137,95 @@ jobs:
           name: UKControllerPlugin.dll
           path: ".\\build\\bin\\UKControllerPlugin.dll"
 
-      # NEW: Upload full build tree so another Windows job can re-run ctest before release
-      - name: Upload Build Tree (for Windows tests before release)
+      - name: Upload Build Tree
         uses: actions/upload-artifact@v4
         with:
-          name: ukcp-build-tree
+          name: ukcp-build-tree-native
           path: build
 
-  # New: Linux build (assets + caches). This keeps CI parity and prepares any frontend assets on Ubuntu.
-  linux-build:
-    name: Linux Build (assets + cache)
+  # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, static libcurl) -----------
+  linux-cross:
+    name: Linux Cross-Build (Win32 via llvm-mingw)
     runs-on: ubuntu-24.04
-    concurrency:
-      group: ukcp-linux-${{ github.ref }}
-      cancel-in-progress: true
+    container:
+      image: ghcr.io/mstorsjo/llvm-mingw:latest
     steps:
+      - name: Install host tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git cmake ninja-build unzip
       - name: Checkout Code and Submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Setup Node/Yarn
-        uses: actions/setup-node@v4
-        with:
-          node-version: "16"
+      - name: Build libcurl (static)
+        env:
+          CURL_VERSION: 7.76.1
+        run: |
+          set -eux
+          curl -L "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip" -o curl.zip
+          unzip -q curl.zip
+          rm curl.zip
+          mv curl-7.76.1 curl-src
+          cmake -S curl-src -B curl-build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=i686-w64-mingw32-clang \
+            -DCMAKE_CXX_COMPILER=i686-w64-mingw32-clang++ \
+            -DCMAKE_RC_COMPILER=i686-w64-mingw32-windres \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_CURL_EXE=OFF \
+            -DBUILD_TESTING=OFF
+          cmake --build curl-build --parallel
+          echo "CURL_INCLUDEDIR=$GITHUB_WORKSPACE/curl-src/include" >> $GITHUB_ENV
+          echo "CURL_LIBRARYDIR=$GITHUB_WORKSPACE/curl-build/lib"   >> $GITHUB_ENV
 
-      - name: Get Yarn Cache Directory
-        id: yarn-cache-dir-path
-        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+      - name: Configure Project (Win32)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=i686-w64-mingw32-clang \
+            -DCMAKE_CXX_COMPILER=i686-w64-mingw32-clang++ \
+            -DCMAKE_RC_COMPILER=i686-w64-mingw32-windres \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DCMAKE_CXX_EXTENSIONS=OFF \
+            -DCURL_INCLUDEDIR="${CURL_INCLUDEDIR}" \
+            -DCURL_LIBDIR="${CURL_LIBRARYDIR}" \
+            -DCURL_LIBRARYDIR="${CURL_LIBRARYDIR}" \
+            -DBUILD_TESTING=ON
 
-      - name: Load Yarn Cache
-        uses: actions/cache@v4
-        id: yarn-cache
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: linux-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            linux-yarn-
+      - name: Build (Ninja)
+        run: cmake --build build --parallel
 
-      - name: Load Cached Node Modules
-        uses: actions/cache@v4
-        with:
-          path: "**/node_modules"
-          key: linux-node-modules-${{ hashFiles('**/yarn.lock') }}
-
-      - name: Install Assets (Linux)
-        run: yarn --frozen-lockfile
-
-      # If you later add Linux-friendly pieces (docs, static analysis) do them here
-
-      - name: Upload Asset Bundle (optional)
-        if: always()
+      - name: Upload Cross Build Tree
         uses: actions/upload-artifact@v4
         with:
-          name: ukcp-linux-assets
-          path: |
-            **/package.json
-            **/yarn.lock
-            **/dist
-          if-no-files-found: ignore
-
-  # New: A dedicated Windows tests job that runs BEFORE release using artifacts from the 'build' job
-  windows-tests:
-    name: Windows Tests (from artifact)
-    runs-on: windows-2025
-    needs: [ build ]   # ensure we have a build tree to test
-    concurrency:
-      group: ukcp-win-tests-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Download Build Tree
-        uses: actions/download-artifact@v4
-        with:
-          name: ukcp-build-tree
+          name: ukcp-build-tree-cross
           path: build
 
-      - name: Ensure EuroScope & GDI32 DLLs
-        shell: pwsh
+  # ----------- WINDOWS TESTS ON CROSS BUILD -----------
+  windows-cross-tests:
+    name: Windows Tests (Cross-Built)
+    runs-on: windows-2025
+    needs: [ linux-cross ]
+    steps:
+      - name: Install VC++ 2010 Redistributables
         run: |
-          $ErrorActionPreference = 'Stop'
-          $root     = (Get-Location).Path
-          $buildBin = Join-Path $root "build\bin"
-          $plugBin  = Join-Path $root "build\src\plugin\bin"
-          if (!(Test-Path $buildBin)) { New-Item -ItemType Directory -Force -Path $buildBin | Out-Null }
+          choco install vcredist2010 --yes
+          choco install vcredist2010 --x86 --yes
 
-          # Copy EuroScope shim next to test EXEs if it exists
-          $eusDll = Join-Path $plugBin "EuroScopePlugInDll.dll"
-          if (Test-Path $eusDll) {
-            Copy-Item $eusDll $buildBin -Force
-            Write-Host "✅ Copied EuroScopePlugInDll.dll to $buildBin"
-          } else {
-            Write-Host "⚠️ EuroScopePlugInDll.dll not found in $plugBin — tests may fail"
-          }
+      - name: Download Cross Build Tree
+        uses: actions/download-artifact@v4
+        with:
+          name: ukcp-build-tree-cross
+          path: build
 
-          # Ensure gdi32.dll is present locally for tests
-          $gdiSource = "$env:WINDIR\System32\gdi32.dll"
-          $gdiDest   = Join-Path $buildBin "gdi32.dll"
-          if (Test-Path $gdiSource) {
-            Copy-Item $gdiSource $gdiDest -Force
-            Write-Host "✅ gdi32.dll copied to $buildBin"
-          } else {
-            throw "❌ gdi32.dll not found in System32 — cannot proceed"
-          }
-
-      - name: Run ctest (artifact build)
+      - name: Run Tests (ctest)
         working-directory: build
         run: |
-          ctest -C Release --output-on-failure --no-tests=error
+          ctest --output-on-failure --no-tests=error
 
   format:
     name: Format
@@ -273,7 +239,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Environment things
       - name: Check Clang Version
         run: clang-cl --version
 
@@ -289,13 +254,16 @@ jobs:
 
       - name: Clang Format
         run: |
-          if (-not ([string]::IsNullOrEmpty("${{ steps.changed-files.outputs.added_modified }}"))) { clang-format --style=file --dry-run -Werror ${{ steps.changed-files.outputs.added_modified }} }
+          if (-not ([string]::IsNullOrEmpty("${{ steps.changed-files.outputs.added_modified }}"))) {
+            clang-format --style=file --dry-run -Werror ${{ steps.changed-files.outputs.added_modified }}
+          }
 
+  # ----------- RELEASE -----------
   release:
     name: Release
     runs-on: windows-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/alpha')
-    needs: [build, linux-build, windows-tests, format]
+    needs: [ build, linux-cross, windows-cross-tests, format ]
     concurrency:
       group: ukcp-release
       cancel-in-progress: false
@@ -305,7 +273,6 @@ jobs:
         with:
           persist-credentials: false
 
-      # Setup all the yarn things and node modules
       - name: Setup Yarn
         uses: actions/setup-node@v4
         with:
@@ -330,11 +297,9 @@ jobs:
           path: "**/node_modules"
           key: ${{ runner.os }}-node-modules-${{ hashFiles('**/yarn.lock') }}
 
-      # Install yarn things
       - name: Install Assets
         run: yarn
 
-      # Download build artifacts
       - name: Download Core Binary
         uses: actions/download-artifact@v4
         with:
