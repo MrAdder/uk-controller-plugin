@@ -144,10 +144,9 @@ jobs:
           path: build
 
   # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, static libcurl) -----------
-  linux-cross:
+    linux-cross:
     name: Linux Cross-Build (Win32 via llvm-mingw, no Docker)
     runs-on: ubuntu-24.04
-
     env:
       LLVM_MINGW_VERSION: 20240619
       LLVM_MINGW_ARCHIVE: llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
@@ -171,14 +170,31 @@ jobs:
         id: cache-llvm-archive
         uses: actions/cache@v4
         with:
-          path: ~/.cache/llvm-mingw/${{ env.LLVM_MINGW_ARCHIVE }}
+          path: ${{ env.HOME }}/.cache/llvm-mingw/${{ env.LLVM_MINGW_ARCHIVE }}
           key: llvm-mingw-archive-${{ env.LLVM_MINGW_VERSION }}
 
       - name: Download llvm-mingw archive (if needed)
         if: steps.cache-llvm-archive.outputs.cache-hit != 'true'
         run: |
-          mkdir -p ~/.cache/llvm-mingw
-          curl -L "${LLVM_MINGW_URL}" -o "~/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}"
+          mkdir -p "$HOME/.cache/llvm-mingw"
+          curl -L "${LLVM_MINGW_URL}" -o "$HOME/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}"
+
+      - name: Cache llvm-mingw extracted
+        id: cache-llvm-extract
+        uses: actions/cache@v4
+        with:
+          path: /opt/llvm-mingw
+          key: llvm-mingw-extract-${{ env.LLVM_MINGW_VERSION }}
+
+      - name: Extract llvm-mingw (if needed)
+        if: steps.cache-llvm-extract.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/llvm-mingw
+          sudo tar -xJf "$HOME/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}" -C /opt/llvm-mingw --strip-components=1
+          ls -l /opt/llvm-mingw/bin
+
+      - name: Add llvm-mingw to PATH
+        run: echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
 
       - name: Cache llvm-mingw extracted
         id: cache-llvm-extract
