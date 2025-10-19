@@ -144,50 +144,108 @@ jobs:
           path: build
 
   # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, static libcurl) -----------
-  linux-cross:
-    name: Linux Cross-Build (Win32 via llvm-mingw)
+    linux-cross:
+    name: Linux Cross-Build (Win32 via llvm-mingw, no Docker)
     runs-on: ubuntu-24.04
-    container:
-      image: ghcr.io/mstorsjo/llvm-mingw:latest
+
+    env:
+      LLVM_MINGW_VERSION: 20240619
+      LLVM_MINGW_ARCHIVE: llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
+      LLVM_MINGW_URL: https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
+      CURL_VERSION: 7.76.1
+
     steps:
       - name: Install host tools
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git cmake ninja-build unzip
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git cmake ninja-build unzip xz-utils
+
       - name: Checkout Code and Submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Build libcurl (static)
-        env:
-          CURL_VERSION: 7.76.1
+      # Cache the llvm-mingw toolchain archive & extracted folder
+      - name: Cache llvm-mingw archive
+        id: cache-llvm-archive
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/llvm-mingw/${{ env.LLVM_MINGW_ARCHIVE }}
+          key: llvm-mingw-archive-${{ env.LLVM_MINGW_VERSION }}
+
+      - name: Download llvm-mingw archive (if needed)
+        if: steps.cache-llvm-archive.outputs.cache-hit != 'true'
         run: |
-          set -eux
+          mkdir -p ~/.cache/llvm-mingw
+          curl -L "${LLVM_MINGW_URL}" -o "~/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}"
+
+      - name: Cache llvm-mingw extracted
+        id: cache-llvm-extract
+        uses: actions/cache@v4
+        with:
+          path: /opt/llvm-mingw
+          key: llvm-mingw-extract-${{ env.LLVM_MINGW_VERSION }}
+
+      - name: Extract llvm-mingw (if needed)
+        if: steps.cache-llvm-extract.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/llvm-mingw
+          sudo tar -xJf ~/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE} -C /opt/llvm-mingw --strip-components=1
+          # Ensure binaries are executable and available
+          ls -l /opt/llvm-mingw/bin
+
+      - name: Add llvm-mingw to PATH
+        run: echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
+
+      # Cache curl source & build
+      - name: Cache curl source
+        id: cache-curl-src
+        uses: actions/cache@v4
+        with:
+          path: curl-src
+          key: curl-src-${{ env.CURL_VERSION }}
+
+      - name: Download curl source (if needed)
+        if: steps.cache-curl-src.outputs.cache-hit != 'true'
+        run: |
           curl -L "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip" -o curl.zip
           unzip -q curl.zip
           rm curl.zip
           mv curl-7.76.1 curl-src
+
+      - name: Cache curl build (static i686)
+        id: cache-curl-build
+        uses: actions/cache@v4
+        with:
+          path: curl-build
+          key: curl-build-i686-static-${{ env.CURL_VERSION }}
+
+      - name: Build libcurl (static, i686)
+        if: steps.cache-curl-build.outputs.cache-hit != 'true'
+        run: |
           cmake -S curl-src -B curl-build -G Ninja \
             -DCMAKE_SYSTEM_NAME=Windows \
             -DCMAKE_C_COMPILER=i686-w64-mingw32-clang \
             -DCMAKE_CXX_COMPILER=i686-w64-mingw32-clang++ \
-            -DCMAKE_RC_COMPILER=i686-w64-mingw32-windres \
+            -DCMAKE_RC_COMPILER=llvm-rc \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_CURL_EXE=OFF \
             -DBUILD_TESTING=OFF
           cmake --build curl-build --parallel
+
+      - name: Export curl paths for CMake
+        run: |
           echo "CURL_INCLUDEDIR=$GITHUB_WORKSPACE/curl-src/include" >> $GITHUB_ENV
           echo "CURL_LIBRARYDIR=$GITHUB_WORKSPACE/curl-build/lib"   >> $GITHUB_ENV
 
-      - name: Configure Project (Win32)
+      - name: Configure Project (Win32, Ninja, static curl)
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=Windows \
             -DCMAKE_C_COMPILER=i686-w64-mingw32-clang \
             -DCMAKE_CXX_COMPILER=i686-w64-mingw32-clang++ \
-            -DCMAKE_RC_COMPILER=i686-w64-mingw32-windres \
+            -DCMAKE_RC_COMPILER=llvm-rc \
             -DCMAKE_CXX_STANDARD=20 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
             -DCMAKE_CXX_EXTENSIONS=OFF \
@@ -199,12 +257,19 @@ jobs:
       - name: Build (Ninja)
         run: cmake --build build --parallel
 
+      # Put EuroScope shim next to tests if CMake placed it elsewhere
+      - name: Ensure EuroScope shim next to test EXEs
+        run: |
+          if [ -f build/src/plugin/bin/EuroScopePlugInDll.dll ] && [ -d build/bin ]; then
+            cp -f build/src/plugin/bin/EuroScopePlugInDll.dll build/bin/ || true
+          fi
+
       - name: Upload Cross Build Tree
         uses: actions/upload-artifact@v4
         with:
           name: ukcp-build-tree-cross
           path: build
-
+          
   # ----------- WINDOWS TESTS ON CROSS BUILD -----------
   windows-cross-tests:
     name: Windows Tests (Cross-Built)
