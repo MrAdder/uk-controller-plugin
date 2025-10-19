@@ -1,21 +1,20 @@
-name: Build (Cross • Format • Release)
+name: Build
 
 on:
   push:
-    branches:
-      - "main"
-      - "alpha"
-      - "beta"
+    branches: ["main", "alpha", "beta"]
   pull_request:
 
 jobs:
-  # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, via xwin) -----------
+  # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32 via xwin + clang-cl) -----------
   linux-cross:
-    name: Linux Cross-Build (Win32 via xwin + clang/lld)
+    name: Linux Cross-Build (Win32 via xwin + clang-cl)
     runs-on: ubuntu-24.04
     env:
-      # Pin an SDK version known to be available; omit CRT so xwin picks a compatible one.
-      XWIN_SDK_VERSION: 10.0.22621.0
+      # xwin + SDK
+      XWIN_VERSION: 0.6.5
+      XWIN_SDK_VERSION: 10.0.20348
+      # curl to embed
       CURL_VERSION: 7.76.1
 
     steps:
@@ -23,97 +22,170 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git cmake ninja-build unzip xz-utils llvm lld jq
+            ca-certificates curl git cmake ninja-build unzip xz-utils perl
 
       - name: Checkout Code and Submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Cache xwin cache and sysroot
+      # Cache the xwin SDK payloads to speed up future runs
+      - name: Cache xwin cache dir
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.xwin-cache
-            /opt/xwin
-          key: xwin-${{ env.XWIN_SDK_VERSION }}
+          path: ~/.xwin-cache
+          key: xwin-cache-${{ env.XWIN_VERSION }}-${{ env.XWIN_SDK_VERSION }}
 
-      - name: Install xwin SDK (if needed)
-        env:
-            XWIN_VERSION: 0.6.7                 # pin a known-good version
+      - name: Install xwin SDK (if needed)  # official .tar.gz release
         run: |
           set -e
-          if [ ! -d "/opt/xwin" ]; then
-                URL="https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-                echo "Downloading xwin from: $URL"
-                curl -L --fail "$URL" -o /tmp/xwin.tar.gz
-                # Extract and install the 'xwin' binary
-                tar -xJf /tmp/xwin.tar.gz -C /tmp
-                sudo mv /tmp/xwin-*/xwin /usr/local/bin/xwin
-                sudo chmod +x /usr/local/bin/xwin
-                rm -rf /tmp/xwin.tar.gz /tmp/xwin-*
-          # Prepare cache dir and materialise the Win32 SDK sysroot
-                mkdir -p ~/.xwin-cache
-                xwin --accept-license --arch x86 \
-                --sdk-version "${XWIN_SDK_VERSION}" \
-                splat --output /opt/xwin --include-debug-libs
-          else
-                echo "/opt/xwin already present; skipping download."
+          if [ ! -x "/usr/local/bin/xwin" ]; then
+            URL="https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+            echo "Downloading xwin from: $URL"
+            curl -L --fail "$URL" -o /tmp/xwin.tar.gz
+
+            mkdir -p /tmp/xwin-extract
+            tar -xzf /tmp/xwin.tar.gz -C /tmp/xwin-extract
+            sudo mv /tmp/xwin-extract/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin /usr/local/bin/xwin
+            sudo chmod +x /usr/local/bin/xwin
+            rm -rf /tmp/xwin.tar.gz /tmp/xwin-extract
           fi
 
+          # Build/refresh the Windows SDK sysroot via xwin
+          mkdir -p ~/.xwin-cache
+          if [ ! -d "/opt/xwin" ]; then
+            xwin --accept-license --arch x86 \
+              --sdk-version "${XWIN_SDK_VERSION}" \
+              splat --output /opt/xwin --include-debug-libs
+          fi
 
-      # ----- Build static libcurl for Win32 with llvm-rc (© → (c) patch) -----
-      - name: Download and build libcurl (static)
+      - name: Create xwin clang-cl toolchain wrappers
         run: |
           set -e
+          mkdir -p /opt/xwin/bin
+
+          # Tiny LD_PRELOAD helper not needed here; use clang-cl directly with MSVC-style paths
+          cat > /opt/xwin/bin/cc << 'EOF'
+          #!/usr/bin/env bash
+          set -e
+          exec clang-cl \
+            -Wno-microsoft /EHa /arch:SSE \
+            /imsvc /opt/xwin/crt/include \
+            /imsvc /opt/xwin/sdk/include/shared \
+            /imsvc /opt/xwin/sdk/include/ucrt \
+            /imsvc /opt/xwin/sdk/include/um \
+            "$@"
+          EOF
+
+          cat > /opt/xwin/bin/lib << 'EOF'
+          #!/usr/bin/env bash
+          set -e
+          exec lld-link /lib \
+            /libpath:/opt/xwin/crt/lib/x86 \
+            /libpath:/opt/xwin/sdk/lib/shared/x86 \
+            /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
+            /libpath:/opt/xwin/sdk/lib/um/x86 \
+            "$@"
+          EOF
+
+          cat > /opt/xwin/bin/link << 'EOF'
+          #!/usr/bin/env bash
+          set -e
+          exec lld-link \
+            /libpath:/opt/xwin/crt/lib/x86 \
+            /libpath:/opt/xwin/sdk/lib/shared/x86 \
+            /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
+            /libpath:/opt/xwin/sdk/lib/um/x86 \
+            "$@"
+          EOF
+
+          cat > /opt/xwin/bin/rc << 'EOF'
+          #!/usr/bin/env bash
+          set -e
+          exec llvm-rc \
+            /I /opt/xwin/crt/include \
+            /I /opt/xwin/sdk/include/shared \
+            /I /opt/xwin/sdk/include/ucrt \
+            /I /opt/xwin/sdk/include/um \
+            "$@"
+          EOF
+
+          # manifest tool
+          ln -sf "$(command -v llvm-mt || command -v llvm-mt-18 || true)" /opt/xwin/bin/mt || true
+
+          chmod +x /opt/xwin/bin/cc /opt/xwin/bin/lib /opt/xwin/bin/link /opt/xwin/bin/rc
+
+          # Minimal CMake toolchain
+          cat > /opt/xwin/bin/xwin.cmake << 'EOF'
+          set(CMAKE_SYSTEM_NAME Windows)
+          set(CMAKE_C_COMPILER   "/opt/xwin/bin/cc")
+          set(CMAKE_CXX_COMPILER "/opt/xwin/bin/cc")
+          set(CMAKE_AR           "/opt/xwin/bin/lib")
+          set(CMAKE_LINKER       "/opt/xwin/bin/link")
+          set(CMAKE_MT           "/opt/xwin/bin/mt")
+          set(CMAKE_RC_COMPILER  "/opt/xwin/bin/rc")
+          EOF
+
+      # ---- libcurl (static) for i686 ----
+      - name: Cache curl source
+        id: cache-curl-src
+        uses: actions/cache@v4
+        with:
+          path: curl-src
+          key: curl-src-${{ env.CURL_VERSION }}
+
+      - name: Download curl source (if needed)
+        if: steps.cache-curl-src.outputs.cache-hit != 'true'
+        run: |
           curl -L "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip" -o curl.zip
-          unzip -q curl.zip && rm curl.zip
+          unzip -q curl.zip
+          rm curl.zip
           mv curl-7.76.1 curl-src
 
-          # llvm-rc can't handle the © in VERSIONINFO; patch to (c)
+      - name: Patch curl .rc for llvm-rc (© → (c))
+        run: |
+          set -e
           sed -i 's/©/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
           sed -i 's/\\xa9/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
           perl -0777 -pe 's/\xC2\xA9/(c)/g' -i curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
 
+      - name: Cache curl build (static i686)
+        id: cache-curl-build
+        uses: actions/cache@v4
+        with:
+          path: curl-build
+          key: curl-build-i686-static-${{ env.CURL_VERSION }}
+
+      - name: Build libcurl (static, i686)
+        if: steps.cache-curl-build.outputs.cache-hit != 'true'
+        run: |
           cmake -S curl-src -B curl-build -G Ninja \
-            -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_SYSROOT=/opt/xwin \
-            -DCMAKE_FIND_ROOT_PATH=/opt/xwin \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_COMPILER_TARGET=i686-pc-windows-msvc \
-            -DCMAKE_CXX_COMPILER_TARGET=i686-pc-windows-msvc \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/xwin/bin/xwin.cmake \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_CURL_EXE=OFF \
             -DBUILD_TESTING=OFF
           cmake --build curl-build --parallel
-          # Some CMake scripts expect libcurl_a.lib
-          cp -f curl-build/lib/libcurl.lib curl-build/lib/libcurl_a.lib
 
-      - name: Export curl paths
+      - name: Export curl paths for CMake
         run: |
           echo "CURL_INCLUDEDIR=$GITHUB_WORKSPACE/curl-src/include" >> $GITHUB_ENV
           echo "CURL_LIBRARYDIR=$GITHUB_WORKSPACE/curl-build/lib"   >> $GITHUB_ENV
 
-      # ----- Configure & build the project for Win32 -----
-      - name: Configure Project (Win32 via xwin)
+      # ---- Configure & Build the project (Win32) ----
+      - name: Configure Project (Win32, Ninja, static curl)
         run: |
           cmake -S . -B build -G Ninja \
-            -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_SYSROOT=/opt/xwin \
-            -DCMAKE_FIND_ROOT_PATH=/opt/xwin \
-            -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_C_COMPILER_TARGET=i686-pc-windows-msvc \
-            -DCMAKE_CXX_COMPILER_TARGET=i686-pc-windows-msvc \
-            -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE=/opt/xwin/bin/xwin.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DCMAKE_CXX_EXTENSIONS=OFF \
             -DCURL_INCLUDEDIR="${CURL_INCLUDEDIR}" \
+            -DCURL_LIBDIR="${CURL_LIBRARYDIR}" \
             -DCURL_LIBRARYDIR="${CURL_LIBRARYDIR}" \
-            -DBUILD_TESTING=ON \
-            -DCMAKE_BUILD_TYPE=Release
+            -DBUILD_TESTING=ON
 
-      - name: Build Project
+      - name: Build (Ninja)
         run: cmake --build build --parallel
 
       - name: Ensure EuroScope shim next to test EXEs
@@ -122,47 +194,32 @@ jobs:
             cp -f build/src/plugin/bin/EuroScopePlugInDll.dll build/bin/ || true
           fi
 
-      # Upload full build tree (for Windows ctest)
+      # Upload the whole build tree (used by Windows ctest)
       - name: Upload Cross Build Tree
         uses: actions/upload-artifact@v4
         with:
-          name: ukcp-build-tree-cross-xwin
+          name: ukcp-build-tree-cross
           path: build
 
-      # Also upload the three DLLs individually for release job convenience
-      - name: Prepare flat DLL dist
-        run: |
-          mkdir -p out-dist
-          find build -type f -name "UKControllerPlugin*.dll" -exec cp -f {} out-dist/ \; || true
-
-      - name: Upload Core DLL
-        if: ${{ hashFiles('out-dist/UKControllerPluginCore.dll') != '' }}
+      # Upload key binaries directly for release job convenience
+      - name: Upload Binaries (Convenience)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: UKControllerPluginCore.dll
-          path: out-dist/UKControllerPluginCore.dll
+          name: ukcp-cross-binaries
+          path: |
+            build/bin/*.dll
+            build/bin/*.exe
+            build/bin/*.pdb
 
-      - name: Upload Updater DLL
-        if: ${{ hashFiles('out-dist/UKControllerPluginUpdater.dll') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: UKControllerPluginUpdater.dll
-          path: out-dist/UKControllerPluginUpdater.dll
-
-      - name: Upload Loader DLL
-        if: ${{ hashFiles('out-dist/UKControllerPlugin.dll') != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: UKControllerPlugin.dll
-          path: out-dist/UKControllerPlugin.dll
-
-  # ----------- WINDOWS TESTS (run ctest on cross-built tree) -----------
+  # ----------- WINDOWS TESTS ON CROSS BUILD -----------
   windows-cross-tests:
     name: Windows Tests (Cross-Built)
     runs-on: windows-2025
     needs: [ linux-cross ]
+
     steps:
-      - name: Install VC++ 2010 Redistributables
+      - name: Install VC++ 2010 Redistributables (x86 + x64)
         run: |
           choco install vcredist2010 --yes
           choco install vcredist2010 --x86 --yes
@@ -170,19 +227,23 @@ jobs:
       - name: Download Cross Build Tree
         uses: actions/download-artifact@v4
         with:
-          name: ukcp-build-tree-cross-xwin
-          path: build
+          name: ukcp-build-tree-cross
+          path: ukcp-build-tree-cross
+
+      - name: Move build tree into place
+        run: |
+          if not exist build mkdir build
+          robocopy ukcp-build-tree-cross build /E || exit /B 0
 
       - name: Run Tests (ctest)
         working-directory: build
-        run: ctest --output-on-failure --no-tests=error
+        run: |
+          ctest --output-on-failure --no-tests=error
 
-  # ----------- FORMAT (unchanged from your flow) -----------
+  # ----------- FORMAT ONLY -----------
   format:
     name: Format
     runs-on: windows-latest
-    concurrency:
-      group: ukcp-format-${{ github.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -214,16 +275,13 @@ jobs:
     runs-on: windows-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/alpha')
     needs: [ linux-cross, windows-cross-tests, format ]
-    concurrency:
-      group: ukcp-release
-      cancel-in-progress: false
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      # Node/Yarn cache (same pattern you used)
       - name: Setup Yarn
         uses: actions/setup-node@v4
         with:
@@ -251,24 +309,12 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      # Download build artifacts (produced by linux-cross above)
-      - name: Download Core Binary
+      # Pull binaries produced by linux-cross for packaging/release
+      - name: Download cross-built binaries
         uses: actions/download-artifact@v4
         with:
-          name: UKControllerPluginCore.dll
-          path: ".\\build\\bin\\UKControllerPluginCore.dll"
-
-      - name: Download Updater Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: UKControllerPluginUpdater.dll
-          path: ".\\build\\bin\\UKControllerPluginUpdater.dll"
-
-      - name: Download Loader Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: UKControllerPlugin.dll
-          path: ".\\build\\bin\\UKControllerPlugin.dll"
+          name: ukcp-cross-binaries
+          path: .\build\bin
 
       - name: Create Release
         env:
