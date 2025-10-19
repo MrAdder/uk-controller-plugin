@@ -1,0 +1,218 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "main"
+      - "alpha"
+      - "beta"
+  pull_request:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ukcp-build-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout Code and Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Toolchain & deps
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build \
+            pkg-config libcurl4-openssl-dev \
+            g++-multilib libc6-dev-i386
+
+      - name: Check Clang Version
+        run: clang --version
+
+      # Node/Yarn setup & caches
+      - name: Setup Node.js (Yarn)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "16"
+
+      - name: Get Yarn Cache Directory
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+
+      - name: Load Yarn Cache
+        uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Load Cached Node Modules
+        uses: actions/cache@v4
+        with:
+          path: "**/node_modules"
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/yarn.lock') }}
+
+      - name: Install Assets
+        run: yarn
+
+      # Versioning script
+      - name: Setup Build Version
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./.github/workflows/plugin_version.ps1
+
+      # Configure & build
+      - name: Run CMake
+        env:
+          CC: clang
+          CXX: clang++
+          CFLAGS: -m32
+          CXXFLAGS: -m32
+        run: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -G Ninja -B build
+
+      - name: Run Ninja Build
+        working-directory: build
+        run: ninja
+
+      - name: Run Tests
+        working-directory: build
+        run: ctest -C Release --output-on-failure --no-tests=error
+
+      # Optional: rename outputs to match .dll artifact names if your build uses other names
+      # - name: Normalize binary names (optional)
+      #   run: |
+      #     mkdir -p build/bin
+      #     # Example: if your outputs are libCore.so etc., copy/rename them to .dll names
+      #     # cp build/bin/libCore.so build/bin/UKControllerPluginCore.dll || true
+      #     # cp build/bin/libUpdater.so build/bin/UKControllerPluginUpdater.dll || true
+      #     # cp build/bin/libLoader.so build/bin/UKControllerPlugin.dll || true
+
+      # Upload artifacts with the exact original names
+      - name: Upload Core Binary As Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPluginCore.dll
+          path: build/bin/UKControllerPluginCore.dll
+          if-no-files-found: error
+
+      - name: Upload Updater Binary As Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: build/bin/UKControllerPluginUpdater.dll
+          if-no-files-found: error
+
+      - name: Upload Loader Binary As Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: build/bin/UKControllerPlugin.dll
+          if-no-files-found: error
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ukcp-format-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Check Clang Version
+        run: clang-format --version
+
+      - name: Get All Changed Files
+        id: changed-files
+        uses: Ana06/get-changed-files@v2.3.0
+        with:
+          filter: |
+            src/**/*.cpp
+            src/**/*.h
+            test/**/*.cpp
+            test/**/*.h
+
+      - name: Clang Format (dry-run, fail on diff)
+        if: ${{ steps.changed-files.outputs.added_modified != '' }}
+        run: |
+          echo "${{ steps.changed-files.outputs.added_modified }}" | xargs -r clang-format --style=file --dry-run -Werror
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/alpha')
+    needs: [build, format]
+    concurrency:
+      group: ukcp-release
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js (Yarn)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "16"
+
+      - name: Get Yarn Cache Directory
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+
+      - name: Load Yarn Cache
+        uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Load Cached Node Modules
+        uses: actions/cache@v4
+        with:
+          path: "**/node_modules"
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/yarn.lock') }}
+
+      - name: Install Assets
+        run: yarn
+
+      # Download the three artifacts by their original names
+      - name: Download Core Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginCore.dll
+          path: ./build/bin
+
+      - name: Download Updater Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: ./build/bin
+
+      - name: Download Loader Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: ./build/bin
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT }}
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: yarn semantic-release
