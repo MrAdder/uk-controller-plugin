@@ -39,16 +39,28 @@ jobs:
           key: xwin-${{ env.XWIN_SDK_VERSION }}
 
       - name: Install xwin SDK (if needed)
+        env:
+            XWIN_VERSION: 0.6.5                 # pin a known-good version
         run: |
+          set -e
           if [ ! -d "/opt/xwin" ]; then
-            curl -L https://github.com/Jake-Shadle/xwin/releases/latest/download/xwin-linux-x64.zip -o /tmp/xwin.zip
-            sudo unzip -q /tmp/xwin.zip -d /usr/local/bin
-            sudo chmod +x /usr/local/bin/xwin
-            mkdir -p ~/.xwin-cache
-            xwin --accept-license --arch x86 \
-              --sdk-version ${XWIN_SDK_VERSION} \
-              splat --output /opt/xwin --include-debug-libs
+                URL="https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.xz"
+                echo "Downloading xwin from: $URL"
+                curl -L --fail "$URL" -o /tmp/xwin.tar.xz
+                # Extract and install the 'xwin' binary
+                tar -xJf /tmp/xwin.tar.xz -C /tmp
+                sudo mv /tmp/xwin-*/xwin /usr/local/bin/xwin
+                sudo chmod +x /usr/local/bin/xwin
+                rm -rf /tmp/xwin.tar.xz /tmp/xwin-*
+          # Prepare cache dir and materialise the Win32 SDK sysroot
+                mkdir -p ~/.xwin-cache
+                xwin --accept-license --arch x86 \
+                --sdk-version "${XWIN_SDK_VERSION}" \
+                splat --output /opt/xwin --include-debug-libs
+          else
+                echo "/opt/xwin already present; skipping download."
           fi
+
 
       # ----- Build static libcurl for Win32 with llvm-rc (© → (c) patch) -----
       - name: Download and build libcurl (static)
