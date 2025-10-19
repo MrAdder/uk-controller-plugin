@@ -1,19 +1,21 @@
-name: Build
+name: Build (Cross • Format • Release)
 
 on:
   push:
-    branches: [ "main", "alpha", "beta" ]
+    branches:
+      - "main"
+      - "alpha"
+      - "beta"
   pull_request:
 
 jobs:
-  # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, static libcurl) -----------
+  # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, via xwin) -----------
   linux-cross:
-    name: Linux Cross-Build (Win32 via llvm-mingw, no Docker)
+    name: Linux Cross-Build (Win32 via xwin + clang/lld)
     runs-on: ubuntu-24.04
     env:
-      LLVM_MINGW_VERSION: 20240619
-      LLVM_MINGW_ARCHIVE: llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
-      LLVM_MINGW_URL: https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz
+      # Pin an SDK version known to be available; omit CRT so xwin picks a compatible one.
+      XWIN_SDK_VERSION: 10.0.22621.0
       CURL_VERSION: 7.76.1
 
     steps:
@@ -21,108 +23,85 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git cmake ninja-build unzip xz-utils
+            ca-certificates curl git cmake ninja-build unzip xz-utils llvm lld jq
 
       - name: Checkout Code and Submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # Cache the llvm-mingw toolchain archive & extracted folder
-      - name: Cache llvm-mingw archive
-        id: cache-llvm-archive
+      - name: Cache xwin cache and sysroot
         uses: actions/cache@v4
         with:
-          path: ~/.cache/llvm-mingw/${{ env.LLVM_MINGW_ARCHIVE }}
-          key: llvm-mingw-archive-${{ env.LLVM_MINGW_VERSION }}
+          path: |
+            ~/.xwin-cache
+            /opt/xwin
+          key: xwin-${{ env.XWIN_SDK_VERSION }}
 
-      - name: Download llvm-mingw archive (if needed)
-        if: steps.cache-llvm-archive.outputs.cache-hit != 'true'
+      - name: Install xwin SDK (if needed)
         run: |
-          mkdir -p "$HOME/.cache/llvm-mingw"
-          curl -L "${LLVM_MINGW_URL}" -o "$HOME/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}"
+          if [ ! -d "/opt/xwin" ]; then
+            curl -L https://github.com/Jake-Shadle/xwin/releases/latest/download/xwin-linux-x64.zip -o /tmp/xwin.zip
+            sudo unzip -q /tmp/xwin.zip -d /usr/local/bin
+            sudo chmod +x /usr/local/bin/xwin
+            mkdir -p ~/.xwin-cache
+            xwin --accept-license --arch x86 \
+              --sdk-version ${XWIN_SDK_VERSION} \
+              splat --output /opt/xwin --include-debug-libs
+          fi
 
-      - name: Cache llvm-mingw extracted
-        id: cache-llvm-extract
-        uses: actions/cache@v4
-        with:
-          path: /opt/llvm-mingw
-          key: llvm-mingw-extract-${{ env.LLVM_MINGW_VERSION }}
-
-      - name: Extract llvm-mingw (if needed)
-        if: steps.cache-llvm-extract.outputs.cache-hit != 'true'
-        run: |
-          sudo mkdir -p /opt/llvm-mingw
-          sudo tar -xJf "$HOME/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE}" -C /opt/llvm-mingw --strip-components=1
-          ls -l /opt/llvm-mingw/bin
-
-      - name: Add llvm-mingw to PATH
-        run: echo "/opt/llvm-mingw/bin" >> $GITHUB_PATH
-
-      # Cache curl source & build
-      - name: Cache curl source
-        id: cache-curl-src
-        uses: actions/cache@v4
-        with:
-          path: curl-src
-          key: curl-src-${{ env.CURL_VERSION }}
-
-      - name: Download curl source (if needed)
-        if: steps.cache-curl-src.outputs.cache-hit != 'true'
-        run: |
-          curl -L "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip" -o curl.zip
-          unzip -q curl.zip
-          rm curl.zip
-          mv curl-7.76.1 curl-src
-
-      - name: Patch curl .rc for llvm-rc (© → (c))
+      # ----- Build static libcurl for Win32 with llvm-rc (© → (c) patch) -----
+      - name: Download and build libcurl (static)
         run: |
           set -e
+          curl -L "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip" -o curl.zip
+          unzip -q curl.zip && rm curl.zip
+          mv curl-7.76.1 curl-src
+
+          # llvm-rc can't handle the © in VERSIONINFO; patch to (c)
           sed -i 's/©/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
           sed -i 's/\\xa9/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
           perl -0777 -pe 's/\xC2\xA9/(c)/g' -i curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
 
-      - name: Cache curl build (static i686)
-        id: cache-curl-build
-        uses: actions/cache@v4
-        with:
-          path: curl-build
-          key: curl-build-i686-static-${{ env.CURL_VERSION }}
-
-      - name: Build libcurl (static, i686)
-        if: steps.cache-curl-build.outputs.cache-hit != 'true'
-        run: |
           cmake -S curl-src -B curl-build -G Ninja \
             -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_C_COMPILER=i686-w64-mingw32-clang \
-            -DCMAKE_CXX_COMPILER=i686-w64-mingw32-clang++ \
-            -DCMAKE_RC_COMPILER=llvm-rc \
+            -DCMAKE_SYSROOT=/opt/xwin \
+            -DCMAKE_FIND_ROOT_PATH=/opt/xwin \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_TARGET=i686-pc-windows-msvc \
+            -DCMAKE_CXX_COMPILER_TARGET=i686-pc-windows-msvc \
+            -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_CURL_EXE=OFF \
             -DBUILD_TESTING=OFF
           cmake --build curl-build --parallel
+          # Some CMake scripts expect libcurl_a.lib
+          cp -f curl-build/lib/libcurl.lib curl-build/lib/libcurl_a.lib
 
-      - name: Export curl paths for CMake
+      - name: Export curl paths
         run: |
           echo "CURL_INCLUDEDIR=$GITHUB_WORKSPACE/curl-src/include" >> $GITHUB_ENV
           echo "CURL_LIBRARYDIR=$GITHUB_WORKSPACE/curl-build/lib"   >> $GITHUB_ENV
 
-      - name: Configure Project (Win32, Ninja, static curl)
+      # ----- Configure & build the project for Win32 -----
+      - name: Configure Project (Win32 via xwin)
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=Windows \
-            -DCMAKE_C_COMPILER=i686-w64-mingw32-clang \
-            -DCMAKE_CXX_COMPILER=i686-w64-mingw32-clang++ \
-            -DCMAKE_RC_COMPILER=llvm-rc \
-            -DCMAKE_CXX_STANDARD=20 \
-            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-            -DCMAKE_CXX_EXTENSIONS=OFF \
+            -DCMAKE_SYSROOT=/opt/xwin \
+            -DCMAKE_FIND_ROOT_PATH=/opt/xwin \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_TARGET=i686-pc-windows-msvc \
+            -DCMAKE_CXX_COMPILER_TARGET=i686-pc-windows-msvc \
+            -DCMAKE_CXX_STANDARD=20 -DCMAKE_CXX_STANDARD_REQUIRED=ON -DCMAKE_CXX_EXTENSIONS=OFF \
             -DCURL_INCLUDEDIR="${CURL_INCLUDEDIR}" \
-            -DCURL_LIBDIR="${CURL_LIBRARYDIR}" \
             -DCURL_LIBRARYDIR="${CURL_LIBRARYDIR}" \
-            -DBUILD_TESTING=ON
+            -DBUILD_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build (Ninja)
+      - name: Build Project
         run: cmake --build build --parallel
 
       - name: Ensure EuroScope shim next to test EXEs
@@ -131,13 +110,41 @@ jobs:
             cp -f build/src/plugin/bin/EuroScopePlugInDll.dll build/bin/ || true
           fi
 
+      # Upload full build tree (for Windows ctest)
       - name: Upload Cross Build Tree
         uses: actions/upload-artifact@v4
         with:
-          name: ukcp-build-tree-cross
+          name: ukcp-build-tree-cross-xwin
           path: build
 
-  # ----------- WINDOWS TESTS ON CROSS BUILD -----------
+      # Also upload the three DLLs individually for release job convenience
+      - name: Prepare flat DLL dist
+        run: |
+          mkdir -p out-dist
+          find build -type f -name "UKControllerPlugin*.dll" -exec cp -f {} out-dist/ \; || true
+
+      - name: Upload Core DLL
+        if: ${{ hashFiles('out-dist/UKControllerPluginCore.dll') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPluginCore.dll
+          path: out-dist/UKControllerPluginCore.dll
+
+      - name: Upload Updater DLL
+        if: ${{ hashFiles('out-dist/UKControllerPluginUpdater.dll') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: out-dist/UKControllerPluginUpdater.dll
+
+      - name: Upload Loader DLL
+        if: ${{ hashFiles('out-dist/UKControllerPlugin.dll') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: out-dist/UKControllerPlugin.dll
+
+  # ----------- WINDOWS TESTS (run ctest on cross-built tree) -----------
   windows-cross-tests:
     name: Windows Tests (Cross-Built)
     runs-on: windows-2025
@@ -151,26 +158,19 @@ jobs:
       - name: Download Cross Build Tree
         uses: actions/download-artifact@v4
         with:
-          name: ukcp-build-tree-cross
-          path: ukcp-build-tree-cross
-
-      - name: Move build tree into place
-        run: |
-          if not exist build mkdir build
-          robocopy ukcp-build-tree-cross build /E || exit /B 0
+          name: ukcp-build-tree-cross-xwin
+          path: build
 
       - name: Run Tests (ctest)
         working-directory: build
-        run: |
-          ctest --output-on-failure --no-tests=error
+        run: ctest --output-on-failure --no-tests=error
 
-  # ----------- FORMAT -----------
+  # ----------- FORMAT (unchanged from your flow) -----------
   format:
     name: Format
     runs-on: windows-latest
     concurrency:
       group: ukcp-format-${{ github.ref }}
-      cancel-in-progress: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -211,6 +211,7 @@ jobs:
         with:
           persist-credentials: false
 
+      # Node/Yarn cache (same pattern you used)
       - name: Setup Yarn
         uses: actions/setup-node@v4
         with:
@@ -238,8 +239,25 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      # If you still want to publish the three DLL artifacts from some other job,
-      # add download-artifact steps here (kept minimal since this pipeline uses cross-build)
+      # Download build artifacts (produced by linux-cross above)
+      - name: Download Core Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginCore.dll
+          path: ".\\build\\bin\\UKControllerPluginCore.dll"
+
+      - name: Download Updater Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: ".\\build\\bin\\UKControllerPluginUpdater.dll"
+
+      - name: Download Loader Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: ".\\build\\bin\\UKControllerPlugin.dll"
+
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
