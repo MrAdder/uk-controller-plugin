@@ -212,6 +212,16 @@ jobs:
           rm curl.zip
           mv curl-7.76.1 curl-src
 
+      - name: Patch curl .rc for llvm-rc (© → (c))
+        run: |
+          set -e
+          # replace literal ©
+          sed -i 's/©/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
+          # replace \xA9 escape if present
+          sed -i 's/\\xa9/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
+          # replace UTF-8 byte sequence as a fallback
+          perl -0777 -pe 's/\xC2\xA9/(c)/g' -i curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
+
       - name: Cache curl build (static i686)
         id: cache-curl-build
         uses: actions/cache@v4
