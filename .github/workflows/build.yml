@@ -2,10 +2,7 @@ name: Build
 
 on:
   push:
-    branches:
-      - "main"
-      - "alpha"
-      - "beta"
+    branches: [ "main", "alpha", "beta" ]
   pull_request:
 
 jobs:
@@ -36,7 +33,7 @@ jobs:
         id: cache-llvm-archive
         uses: actions/cache@v4
         with:
-          path: ${{ env.HOME }}/.cache/llvm-mingw/${{ env.LLVM_MINGW_ARCHIVE }}
+          path: ~/.cache/llvm-mingw/${{ env.LLVM_MINGW_ARCHIVE }}
           key: llvm-mingw-archive-${{ env.LLVM_MINGW_VERSION }}
 
       - name: Download llvm-mingw archive (if needed)
@@ -81,11 +78,8 @@ jobs:
       - name: Patch curl .rc for llvm-rc (© → (c))
         run: |
           set -e
-          # replace literal ©
           sed -i 's/©/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
-          # replace \xA9 escape if present
           sed -i 's/\\xa9/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
-          # replace UTF-8 byte sequence as a fallback
           perl -0777 -pe 's/\xC2\xA9/(c)/g' -i curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
 
       - name: Cache curl build (static i686)
@@ -170,6 +164,7 @@ jobs:
         run: |
           ctest --output-on-failure --no-tests=error
 
+  # ----------- FORMAT -----------
   format:
     name: Format
     runs-on: windows-latest
@@ -206,7 +201,7 @@ jobs:
     name: Release
     runs-on: windows-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/alpha')
-    needs: [ build, linux-cross, windows-cross-tests, format ]
+    needs: [ linux-cross, windows-cross-tests, format ]
     concurrency:
       group: ukcp-release
       cancel-in-progress: false
@@ -243,22 +238,8 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      - name: Download Core Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: UKControllerPluginCore.dll
-          path: ".\\build\\bin\\UKControllerPluginCore.dll"
-
-      - name: Download Updater Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: UKControllerPluginUpdater.dll
-        #  path is a directory, not a file path; keep default and move later if needed
-      - name: Download Loader Binary
-        uses: actions/download-artifact@v4
-        with:
-          name: UKControllerPlugin.dll
-
+      # If you still want to publish the three DLL artifacts from some other job,
+      # add download-artifact steps here (kept minimal since this pipeline uses cross-build)
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
