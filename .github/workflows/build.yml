@@ -48,10 +48,10 @@ jobs:
                 echo "Downloading xwin from: $URL"
                 curl -L --fail "$URL" -o /tmp/xwin.tar.gz
                 # Extract and install the 'xwin' binary
-                tar -xJf /tmp/xwin.tar.xz -C /tmp
+                tar -xJf /tmp/xwin.tar.gz -C /tmp
                 sudo mv /tmp/xwin-*/xwin /usr/local/bin/xwin
                 sudo chmod +x /usr/local/bin/xwin
-                rm -rf /tmp/xwin.tar.xz /tmp/xwin-*
+                rm -rf /tmp/xwin.tar.gz /tmp/xwin-*
           # Prepare cache dir and materialise the Win32 SDK sysroot
                 mkdir -p ~/.xwin-cache
                 xwin --accept-license --arch x86 \
