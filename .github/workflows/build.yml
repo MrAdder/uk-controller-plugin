@@ -76,7 +76,7 @@ jobs:
 
       - name: Get Yarn Cache Directory
         id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
 
       - name: Load Yarn Cache
         uses: actions/cache@v4
@@ -144,7 +144,7 @@ jobs:
           path: build
 
   # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32, static libcurl) -----------
-    linux-cross:
+  linux-cross:
     name: Linux Cross-Build (Win32 via llvm-mingw, no Docker)
     runs-on: ubuntu-24.04
 
@@ -192,7 +192,6 @@ jobs:
         run: |
           sudo mkdir -p /opt/llvm-mingw
           sudo tar -xJf ~/.cache/llvm-mingw/${LLVM_MINGW_ARCHIVE} -C /opt/llvm-mingw --strip-components=1
-          # Ensure binaries are executable and available
           ls -l /opt/llvm-mingw/bin
 
       - name: Add llvm-mingw to PATH
@@ -257,7 +256,6 @@ jobs:
       - name: Build (Ninja)
         run: cmake --build build --parallel
 
-      # Put EuroScope shim next to tests if CMake placed it elsewhere
       - name: Ensure EuroScope shim next to test EXEs
         run: |
           if [ -f build/src/plugin/bin/EuroScopePlugInDll.dll ] && [ -d build/bin ]; then
@@ -269,7 +267,7 @@ jobs:
         with:
           name: ukcp-build-tree-cross
           path: build
-          
+
   # ----------- WINDOWS TESTS ON CROSS BUILD -----------
   windows-cross-tests:
     name: Windows Tests (Cross-Built)
@@ -285,7 +283,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ukcp-build-tree-cross
-          path: build
+        # Unpack/restore straight into ./build for ctest discovery
+      - name: Move build tree into place
+        run: |
+          if not exist build mkdir build
+          robocopy ukcp-build-tree-cross build /E || exit /B 0
 
       - name: Run Tests (ctest)
         working-directory: build
@@ -345,7 +347,7 @@ jobs:
 
       - name: Get Yarn Cache Directory
         id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
 
       - name: Load Yarn Cache
         uses: actions/cache@v4
