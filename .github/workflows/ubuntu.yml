@@ -2,128 +2,52 @@ name: Ubuntu Build
 
 on:
   push:
-    branches:
-      - "main"
-      - "alpha"
-      - "beta"
+    branches: [ "main", "alpha", "beta" ]
   pull_request:
 
 jobs:
-  format:
-    name: Format
+  build_ubuntu_cross:
+    name: Build (Ubuntu → Windows DLLs via llvm-mingw + Ninja)
     runs-on: ubuntu-latest
-    concurrency:
-      group: ukcp-format-${{ github.ref }}
-      cancel-in-progress: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-
-      - name: Install clang-format
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-format
-
-      - name: Check Clang Version
-        run: clang-format --version
-
-      - name: Get All Changed Files
-        id: changed-files
-        uses: Ana06/get-changed-files@v2.3.0
-        with:
-          filter: |
-            src/**/*.cpp
-            src/**/*.h
-            test/**/*.cpp
-            test/**/*.h
-
-      - name: Clang Format (dry-run, fail on diff)
-        if: ${{ steps.changed-files.outputs.added_modified != '' }}
-        run: |
-          echo "${{ steps.changed-files.outputs.added_modified }}" | xargs -r clang-format --style=file --dry-run -Werror
-
-  build_windows_and_test:
-    name: Build & Test (Windows, VC++ 2010 redists)
-    runs-on: windows-2025
     concurrency:
       group: ukcp-build-${{ github.ref }}
       cancel-in-progress: true
+    env:
+      CURL_VERSION: "7.76.1"
+      LLVM_MINGW_DIR: /opt/llvm-mingw
+      # Pin a specific archive so cache keys are stable (update when you want a new toolchain)
+      LLVM_MINGW_ARCHIVE: "llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
+      LLVM_MINGW_URL: "https://github.com/mstorsjo/llvm-mingw/releases/download/20240619/llvm-mingw-20240619-ucrt-ubuntu-20.04-x86_64.tar.xz"
     steps:
-      - name: Checkout Code and Submodules
+      - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # Environment: VC++ 2010 redistributables (x86 & x64)
-      - name: Install VC++ 2010 Redistributables (x86 and x64)
+      - name: Install build deps
         run: |
-          choco install vcredist2010 --yes
-          choco install vcredist2010 --x86 --yes
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build xz-utils curl unzip pkg-config powershell ccache
 
-      # Visual Studio dev shell (x86) so clang-cl and nmake/Ninja find the toolset
-      - name: Set up Visual Studio Shell
-        uses: egor-tensin/vs-shell@v2
-        with:
-          arch: x86
-
-      - name: Check Clang Version
-        run: clang-cl --version
-
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@master
-
-      # cURL: use cache + MSVC static build (matches your original)
-      - name: Cache cURL
-        id: cache-curl
-        uses: actions/cache@v4
-        with:
-          path: "C:\\hostedtoolcache\\windows\\libcurl"
-          key: "ukcp-curl-build"
-
-      - name: Download and Build cURL
-        if: steps.cache-curl.outputs.cache-hit != 'true'
-        env:
-          CURL_DOWNLOAD_URL: "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip"
-          CURL_VERSION: 7.76.1
-        run: |
-          New-Item -Path "C:\\hostedtoolcache\\windows" -Name "libcurl" -ItemType "directory"
-          $WebClient = New-Object System.Net.WebClient
-          $WebClient.DownloadFile(${env:CURL_DOWNLOAD_URL}, "C:\\hostedtoolcache\\windows\\libcurl\\curl.zip")
-          Set-Location -Path "C:\\hostedtoolcache\\windows\\libcurl"
-          7z x curl.zip
-          Remove-Item curl.zip
-          Set-Location -Path "C:\\hostedtoolcache\\windows\\libcurl\\curl-${env:CURL_VERSION}\\winbuild"
-          nmake /f Makefile.vc mode=static ENABLE_SCHANNEL=yes
-
-      - name: Setup cURL Environment
-        env:
-          CURL_VERSION: 7.76.1
-        run: |
-          echo "CURL_INCLUDEDIR=C:\\hostedtoolcache\\windows\\libcurl\\curl-${env:CURL_VERSION}\\builds\\libcurl-vc-x86-release-static-ipv6-sspi-schannel\\include" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "CURL_LIBRARYDIR=C:\\hostedtoolcache\\windows\\libcurl\\curl-${env:CURL_VERSION}\\builds\\libcurl-vc-x86-release-static-ipv6-sspi-schannel\\lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      # Node/Yarn setup & caches
+      # ---------- Node/Yarn caches ----------
       - name: Setup Node.js (Yarn)
         uses: actions/setup-node@v4
         with:
           node-version: "16"
 
-      - name: Get Yarn Cache Directory
+      - name: Yarn cache dir
         id: yarn-cache-dir-path
-        run: echo "dir=$(yarn cache dir)" >> $env:GITHUB_OUTPUT
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
 
-      - name: Load Yarn Cache
+      - name: Restore Yarn cache
         uses: actions/cache@v4
-        id: yarn-cache
         with:
           path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
           key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
 
-      - name: Load Cached Node Modules
+      - name: Restore node_modules
         uses: actions/cache@v4
         with:
           path: "**/node_modules"
@@ -132,55 +56,173 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      - name: Setup Build Version
+      - name: Build version metadata
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: .\\.github\\workflows\\plugin_version.ps1
+        run: ./.github/workflows/plugin_version.ps1
 
-      - name: Run CMake (MSVC clang-cl, 32-bit flags preserved)
-        env:
-          CC: clang-cl
-          CFLAGS: -m32
-          CXX: clang-cl
-          CXXFLAGS: -m32
-        run: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -G Ninja -Bbuild
+      # ---------- Cache llvm-mingw toolchain ----------
+      - name: Cache llvm-mingw
+        id: cache-llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LLVM_MINGW_DIR }}
+          key: ${{ runner.os }}-llvm-mingw-${{ env.LLVM_MINGW_ARCHIVE }}
 
-      - name: Run Ninja Build
-        working-directory: build
-        run: ninja
-
-      - name: Run Tests (Windows, VC++2010 redists present)
-        working-directory: build
+      - name: Fetch llvm-mingw (Windows 32-bit target)
+        if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
         run: |
-          ctest -C Release --output-on-failure --no-tests=error
+          sudo mkdir -p "$LLVM_MINGW_DIR"
+          curl -L "$LLVM_MINGW_URL" | sudo tar -xJ --strip-components=1 -C "$LLVM_MINGW_DIR"
 
-      # Upload Windows-built, Windows-tested artifacts — keep the .dll names
-      - name: Upload Core Binary As Artifact
+      - name: Add llvm-mingw to PATH
+        run: echo "$LLVM_MINGW_DIR/bin" >> $GITHUB_PATH
+
+      # ---------- Cache Win32 libcurl package ----------
+      - name: Cache Win32 libcurl dev package
+        id: cache-wincurl
+        uses: actions/cache@v4
+        with:
+          path: $HOME/wincurl
+          key: ${{ runner.os }}-wincurl-${{ env.CURL_VERSION }}
+
+      - name: Get prebuilt Win32 libcurl
+        if: steps.cache-wincurl.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p $HOME/wincurl
+          # Try versioned path first, then fallback
+          curl -L -o $HOME/wincurl/curl.zip "https://curl.se/windows/dl-${CURL_VERSION//./_}/curl-${CURL_VERSION}-win32-mingw.zip" || true
+          if [ ! -s $HOME/wincurl/curl.zip ]; then
+            curl -L -o $HOME/wincurl/curl.zip "https://curl.se/windows/latest.cgi?p=curl-${CURL_VERSION}-win32-mingw.zip" || true
+          fi
+          unzip -q $HOME/wincurl/curl.zip -d $HOME/wincurl || true
+
+      - name: Export curl include/lib paths
+        run: |
+          CINC=$(find $HOME/wincurl -type d -name include | head -n1 || true)
+          CLIB=$(find $HOME/wincurl -type d -name lib | head -n1 || true)
+          echo "CURL_INCLUDEDIR=$CINC" >> $GITHUB_ENV
+          echo "CURL_LIBRARYDIR=$CLIB" >> $GITHUB_ENV
+
+      # ---------- ccache ----------
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-mingw-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-ccache-mingw-
+
+      - name: Show ccache stats (before)
+        run: ccache -s || true
+
+      # ---------- Configure & build with Ninja + ccache ----------
+      - name: Configure (CMake cross, Ninja + ccache)
+        env:
+          CC: i686-w64-mingw32-clang
+          CXX: i686-w64-mingw32-clang++
+          RC: i686-w64-mingw32-windres
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_SYSTEM_PROCESSOR=x86 \
+            -DCMAKE_C_COMPILER=$CC \
+            -DCMAKE_CXX_COMPILER=$CXX \
+            -DCMAKE_RC_COMPILER=$RC \
+            -DCMAKE_CROSSCOMPILING=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCURL_INCLUDEDIR="${CURL_INCLUDEDIR:-}" \
+            -DCURL_LIBRARYDIR="${CURL_LIBRARYDIR:-}"
+
+      - name: Build (Ninja)
+        run: ninja -C build
+
+      - name: Show ccache stats (after)
+        run: ccache -s || true
+
+      # ---------- Upload artifacts ----------
+      - name: Upload Core DLL
         uses: actions/upload-artifact@v4
         with:
           name: UKControllerPluginCore.dll
-          path: ".\\build\\bin\\UKControllerPluginCore.dll"
+          path: build/bin/UKControllerPluginCore.dll
           if-no-files-found: error
 
-      - name: Upload Updater Binary As Artifact
+      - name: Upload Updater DLL
         uses: actions/upload-artifact@v4
         with:
           name: UKControllerPluginUpdater.dll
-          path: ".\\build\\bin\\UKControllerPluginUpdater.dll"
+          path: build/bin/UKControllerPluginUpdater.dll
           if-no-files-found: error
 
-      - name: Upload Loader Binary As Artifact
+      - name: Upload Loader DLL
         uses: actions/upload-artifact@v4
         with:
           name: UKControllerPlugin.dll
-          path: ".\\build\\bin\\UKControllerPlugin.dll"
+          path: build/bin/UKControllerPlugin.dll
           if-no-files-found: error
+
+      - name: Upload Build Tree for Testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tree-windows-cross
+          path: build/**
+
+  test_windows:
+    name: Test (Windows, VC++ 2010 redists)
+    runs-on: windows-2025
+    needs: build_ubuntu_cross
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install VC++ 2010 Redistributables (x86 & x64)
+        run: |
+          choco install vcredist2010 --yes
+          choco install vcredist2010 --x86 --yes
+
+      - name: Download Core DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginCore.dll
+          path: .\build\bin
+
+      - name: Download Updater DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: .\build\bin
+
+      - name: Download Loader DLL
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: .\build\bin
+
+      - name: Download Build Tree
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree-windows-cross
+          path: .\build
+
+      - name: List artifacts
+        run: dir .\build\bin
+
+      - name: Run Tests (ctest)
+        working-directory: build
+        run: |
+          ctest -C Release --output-on-failure --no-tests=error
 
   release:
     name: Release
     runs-on: windows-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/alpha')
-    needs: [build_windows_and_test, format]
+    needs: [test_windows]
     concurrency:
       group: ukcp-release
       cancel-in-progress: false
@@ -195,21 +237,20 @@ jobs:
         with:
           node-version: "16"
 
-      - name: Get Yarn Cache Directory
+      - name: Yarn cache dir
         id: yarn-cache-dir-path
         shell: bash
         run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
 
-      - name: Load Yarn Cache
+      - name: Restore Yarn cache
         uses: actions/cache@v4
-        id: yarn-cache
         with:
           path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
           key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
 
-      - name: Load Cached Node Modules
+      - name: Restore node_modules
         uses: actions/cache@v4
         with:
           path: "**/node_modules"
@@ -218,23 +259,23 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      - name: Download Core Binary
+      - name: Download Core DLL
         uses: actions/download-artifact@v4
         with:
           name: UKControllerPluginCore.dll
-          path: ".\\build\\bin"
+          path: .\build\bin
 
-      - name: Download Updater Binary
+      - name: Download Updater DLL
         uses: actions/download-artifact@v4
         with:
           name: UKControllerPluginUpdater.dll
-          path: ".\\build\\bin"
+          path: .\build\bin
 
-      - name: Download Loader Binary
+      - name: Download Loader DLL
         uses: actions/download-artifact@v4
         with:
           name: UKControllerPlugin.dll
-          path: ".\\build\\bin"
+          path: .\build\bin
 
       - name: Create Release
         env:
