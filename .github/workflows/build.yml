@@ -134,7 +134,7 @@ jobs:
         run: |
           if (-not ([string]::IsNullOrEmpty("${{ steps.changed-files-src.outputs.added_modified }}"))) { clang-tidy ${{ steps.changed-files-src.outputs.added_modified }} -p build }
 
-      # Upload artifacts
+      # Upload artifacts (DLLs as before)
       - name: Upload Core Binary As Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -152,6 +152,114 @@ jobs:
         with:
           name: UKControllerPlugin.dll
           path: ".\\build\\bin\\UKControllerPlugin.dll"
+
+      # NEW: Upload full build tree so another Windows job can re-run ctest before release
+      - name: Upload Build Tree (for Windows tests before release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ukcp-build-tree
+          path: build
+
+  # New: Linux build (assets + caches). This keeps CI parity and prepares any frontend assets on Ubuntu.
+  linux-build:
+    name: Linux Build (assets + cache)
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: ukcp-linux-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout Code and Submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node/Yarn
+        uses: actions/setup-node@v4
+        with:
+          node-version: "16"
+
+      - name: Get Yarn Cache Directory
+        id: yarn-cache-dir-path
+        run: echo "dir=$(yarn cache dir)" >> $GITHUB_OUTPUT
+
+      - name: Load Yarn Cache
+        uses: actions/cache@v4
+        id: yarn-cache
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: linux-yarn-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            linux-yarn-
+
+      - name: Load Cached Node Modules
+        uses: actions/cache@v4
+        with:
+          path: "**/node_modules"
+          key: linux-node-modules-${{ hashFiles('**/yarn.lock') }}
+
+      - name: Install Assets (Linux)
+        run: yarn --frozen-lockfile
+
+      # If you later add Linux-friendly pieces (docs, static analysis) do them here
+
+      - name: Upload Asset Bundle (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ukcp-linux-assets
+          path: |
+            **/package.json
+            **/yarn.lock
+            **/dist
+          if-no-files-found: ignore
+
+  # New: A dedicated Windows tests job that runs BEFORE release using artifacts from the 'build' job
+  windows-tests:
+    name: Windows Tests (from artifact)
+    runs-on: windows-2025
+    needs: [ build ]   # ensure we have a build tree to test
+    concurrency:
+      group: ukcp-win-tests-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Download Build Tree
+        uses: actions/download-artifact@v4
+        with:
+          name: ukcp-build-tree
+          path: build
+
+      - name: Ensure EuroScope & GDI32 DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root     = (Get-Location).Path
+          $buildBin = Join-Path $root "build\bin"
+          $plugBin  = Join-Path $root "build\src\plugin\bin"
+          if (!(Test-Path $buildBin)) { New-Item -ItemType Directory -Force -Path $buildBin | Out-Null }
+
+          # Copy EuroScope shim next to test EXEs if it exists
+          $eusDll = Join-Path $plugBin "EuroScopePlugInDll.dll"
+          if (Test-Path $eusDll) {
+            Copy-Item $eusDll $buildBin -Force
+            Write-Host "✅ Copied EuroScopePlugInDll.dll to $buildBin"
+          } else {
+            Write-Host "⚠️ EuroScopePlugInDll.dll not found in $plugBin — tests may fail"
+          }
+
+          # Ensure gdi32.dll is present locally for tests
+          $gdiSource = "$env:WINDIR\System32\gdi32.dll"
+          $gdiDest   = Join-Path $buildBin "gdi32.dll"
+          if (Test-Path $gdiSource) {
+            Copy-Item $gdiSource $gdiDest -Force
+            Write-Host "✅ gdi32.dll copied to $buildBin"
+          } else {
+            throw "❌ gdi32.dll not found in System32 — cannot proceed"
+          }
+
+      - name: Run ctest (artifact build)
+        working-directory: build
+        run: |
+          ctest -C Release --output-on-failure --no-tests=error
 
   format:
     name: Format
@@ -187,7 +295,7 @@ jobs:
     name: Release
     runs-on: windows-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/beta' || github.ref == 'refs/heads/alpha')
-    needs: [build, format]
+    needs: [build, linux-build, windows-tests, format]
     concurrency:
       group: ukcp-release
       cancel-in-progress: false
