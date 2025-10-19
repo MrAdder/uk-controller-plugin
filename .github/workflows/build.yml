@@ -11,10 +11,9 @@ jobs:
     name: Linux Cross-Build (Win32 via xwin + clang-cl)
     runs-on: ubuntu-24.04
     env:
-      # xwin + SDK
+      # xwin version – we’ll probe SDK versions at runtime
       XWIN_VERSION: 0.6.5
-      XWIN_SDK_VERSION: 10.0.20348
-      # curl to embed
+      # curl we embed/build statically for Win32
       CURL_VERSION: 7.76.1
 
     steps:
@@ -29,21 +28,20 @@ jobs:
         with:
           submodules: recursive
 
-      # Cache the xwin SDK payloads to speed up future runs
+      # Cache the xwin payloads (MSVC CRT/SDK files)
       - name: Cache xwin cache dir
         uses: actions/cache@v4
         with:
           path: ~/.xwin-cache
-          key: xwin-cache-${{ env.XWIN_VERSION }}-${{ env.XWIN_SDK_VERSION }}
+          key: xwin-cache-${{ env.XWIN_VERSION }}
 
-      - name: Install xwin SDK (if needed)  # official .tar.gz release
+      - name: Install xwin CLI (official .tar.gz)
         run: |
           set -e
           if [ ! -x "/usr/local/bin/xwin" ]; then
             URL="https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-            echo "Downloading xwin from: $URL"
+            echo "Downloading xwin: $URL"
             curl -L --fail "$URL" -o /tmp/xwin.tar.gz
-
             mkdir -p /tmp/xwin-extract
             tar -xzf /tmp/xwin.tar.gz -C /tmp/xwin-extract
             sudo mv /tmp/xwin-extract/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin /usr/local/bin/xwin
@@ -51,12 +49,26 @@ jobs:
             rm -rf /tmp/xwin.tar.gz /tmp/xwin-extract
           fi
 
-          # Build/refresh the Windows SDK sysroot via xwin
+      - name: Provision Windows SDK (auto-fallback list)
+        run: |
+          set -e
           mkdir -p ~/.xwin-cache
           if [ ! -d "/opt/xwin" ]; then
-            xwin --accept-license --arch x86 \
-              --sdk-version "${XWIN_SDK_VERSION}" \
-              splat --output /opt/xwin --include-debug-libs
+            # Try these in order; first one that succeeds wins
+            SDKS="10.0.26100 10.0.22621 10.0.22000 10.0.19041"
+            for v in $SDKS; do
+              echo "Attempting xwin splat with SDK $v..."
+              if xwin --accept-license --arch x86 --sdk-version "$v" splat --output /opt/xwin --include-debug-libs; then
+                echo "xwin splat succeeded with SDK $v"
+                exit 0
+              else
+                echo "xwin splat failed with SDK $v, trying next..."
+              fi
+            done
+            echo "All SDK candidates failed. Try updating the list or xwin version." >&2
+            exit 1
+          else
+            echo "/opt/xwin already present, skipping splat."
           fi
 
       - name: Create xwin clang-cl toolchain wrappers
@@ -64,7 +76,6 @@ jobs:
           set -e
           mkdir -p /opt/xwin/bin
 
-          # Tiny LD_PRELOAD helper not needed here; use clang-cl directly with MSVC-style paths
           cat > /opt/xwin/bin/cc << 'EOF'
           #!/usr/bin/env bash
           set -e
@@ -110,12 +121,9 @@ jobs:
             "$@"
           EOF
 
-          # manifest tool
           ln -sf "$(command -v llvm-mt || command -v llvm-mt-18 || true)" /opt/xwin/bin/mt || true
-
           chmod +x /opt/xwin/bin/cc /opt/xwin/bin/lib /opt/xwin/bin/link /opt/xwin/bin/rc
 
-          # Minimal CMake toolchain
           cat > /opt/xwin/bin/xwin.cmake << 'EOF'
           set(CMAKE_SYSTEM_NAME Windows)
           set(CMAKE_C_COMPILER   "/opt/xwin/bin/cc")
@@ -126,7 +134,7 @@ jobs:
           set(CMAKE_RC_COMPILER  "/opt/xwin/bin/rc")
           EOF
 
-      # ---- libcurl (static) for i686 ----
+      # ---- Build libcurl (static) for i686 ----
       - name: Cache curl source
         id: cache-curl-src
         uses: actions/cache@v4
@@ -194,23 +202,34 @@ jobs:
             cp -f build/src/plugin/bin/EuroScopePlugInDll.dll build/bin/ || true
           fi
 
-      # Upload the whole build tree (used by Windows ctest)
+      # Upload the whole build tree (for Windows ctest)
       - name: Upload Cross Build Tree
         uses: actions/upload-artifact@v4
         with:
           name: ukcp-build-tree-cross
           path: build
 
-      # Upload key binaries directly for release job convenience
-      - name: Upload Binaries (Convenience)
+      # Upload individual DLLs for release convenience
+      - name: Upload Core DLL
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ukcp-cross-binaries
-          path: |
-            build/bin/*.dll
-            build/bin/*.exe
-            build/bin/*.pdb
+          name: UKControllerPluginCore.dll
+          path: build/bin/UKControllerPluginCore.dll
+
+      - name: Upload Updater DLL
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: build/bin/UKControllerPluginUpdater.dll
+
+      - name: Upload Loader DLL
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: build/bin/UKControllerPlugin.dll
 
   # ----------- WINDOWS TESTS ON CROSS BUILD -----------
   windows-cross-tests:
@@ -309,12 +328,24 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      # Pull binaries produced by linux-cross for packaging/release
-      - name: Download cross-built binaries
+      # Download specific DLLs produced by linux-cross
+      - name: Download Core Binary
         uses: actions/download-artifact@v4
         with:
-          name: ukcp-cross-binaries
-          path: .\build\bin
+          name: UKControllerPluginCore.dll
+          path: .\build\bin\UKControllerPluginCore.dll
+
+      - name: Download Updater Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPluginUpdater.dll
+          path: .\build\bin\UKControllerPluginUpdater.dll
+
+      - name: Download Loader Binary
+        uses: actions/download-artifact@v4
+        with:
+          name: UKControllerPlugin.dll
+          path: .\build\bin\UKControllerPlugin.dll
 
       - name: Create Release
         env:
