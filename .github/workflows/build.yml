@@ -8,283 +8,217 @@ on:
 jobs:
   # ----------- LINUX CROSS-BUILD TO WINDOWS (Win32 via xwin + clang-cl) -----------
   linux-cross:
-    name: Linux Cross-Build (Win32 via xwin + clang-cl)
-    runs-on: ubuntu-24.04
-    env:
-      XWIN_VERSION: 0.6.5
-      CURL_VERSION: 7.76.1
+  name: Linux Cross-Build (xwin + clang-cl, matches Dockerfile)
+  runs-on: ubuntu-24.04
 
-    steps:
-      - name: Install host tools
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git cmake ninja-build unzip xz-utils perl \
-            clang-18 clang-tools-18 lld-18 llvm-18 llvm-18-tools
+  env:
+    CURL_VERSION: 7.62.0
+    LLVM_VERSION: 18
+    XWIN_VERSION: 0.6.5
+    XWIN_TRIPLE: x86_64-unknown-linux-musl
+    WINDOWS_CRT_VERSION: 14.29.16.11
+    WINDOWS_SDK_VERSION: 10.0.20348
+    TOOLCHAIN: /opt/xwin/bin/xwin.cmake
 
-      - name: Checkout Code and Submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
+  steps:
+    - name: Install host tools
+        # includes clang/llvm 18 and lld 18, ninja, cmake, etc.
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          ca-certificates curl git cmake ninja-build unzip xz-utils build-essential \
+          clang-18 clang-tools-18 lld-18 llvm-18 llvm-18-tools
 
-      - name: Cache xwin payloads
-        uses: actions/cache@v4
-        with:
-          path: ~/.xwin-cache
-          key: xwin-cache-${{ env.XWIN_VERSION }}
+    - name: Checkout repo (with submodules)
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: Install xwin CLI (official .tar.gz)
-        run: |
-          set -e
-          if [ ! -x "/usr/local/bin/xwin" ]; then
-            URL="https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
-            echo "Downloading xwin: $URL"
-            curl -L --fail "$URL" -o /tmp/xwin.tar.gz
-            mkdir -p /tmp/xwin-extract
-            tar -xzf /tmp/xwin.tar.gz -C /tmp/xwin-extract
-            sudo mv /tmp/xwin-extract/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin /usr/local/bin/xwin
-            sudo chmod +x /usr/local/bin/xwin
-            rm -rf /tmp/xwin.tar.gz /tmp/xwin-extract
-          fi
+    # Cache Microsoft payloads fetched by xwin
+    - name: Cache xwin downloads
+      uses: actions/cache@v4
+      with:
+        path: ~/.xwin-cache
+        key: xwin-cache-${{ env.XWIN_VERSION }}-crt${{ env.WINDOWS_CRT_VERSION }}-sdk${{ env.WINDOWS_SDK_VERSION }}
 
-      - name: Provision Windows SDK (auto-fallback list)
-        run: |
-          set -e
-          mkdir -p ~/.xwin-cache
-          if [ ! -d "/opt/xwin" ]; then
-            SDKS="10.0.26100 10.0.22621 10.0.22000 10.0.19041"
-            for v in $SDKS; do
-              echo "Attempting xwin splat with SDK $v..."
-              if xwin --accept-license --arch x86 --sdk-version "$v" splat --output /opt/xwin --include-debug-libs; then
-                echo "xwin splat succeeded with SDK $v"
-                exit 0
-              else
-                echo "xwin splat failed with SDK $v, trying next..."
-              fi
-            done
-            echo "All SDK candidates failed. Try updating the list or xwin version." >&2
-            exit 1
-          else
-            echo "/opt/xwin already present, skipping splat."
-          fi
+    - name: Install xwin (official tar.gz)
+      run: |
+        set -eux
+        if ! command -v xwin >/dev/null 2>&1; then
+          curl -L --fail \
+            "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-${XWIN_TRIPLE}.tar.gz" \
+            -o /tmp/xwin.tar.gz
+          mkdir -p /tmp/xwin-extract
+          tar -xzf /tmp/xwin.tar.gz -C /tmp/xwin-extract
+          sudo mv /tmp/xwin-extract/xwin-*/xwin /usr/local/bin/xwin
+          sudo chmod +x /usr/local/bin/xwin
+          rm -rf /tmp/xwin.tar.gz /tmp/xwin-extract
+        fi
+        xwin --version
 
-      - name: Create xwin clang-cl toolchain wrappers (auto-detect clang-cl)
-        run: |
-          set -e
-          mkdir -p /opt/xwin/bin
+    - name: Splat CRT/SDK into /opt/xwin (exact versions)
+      run: |
+        set -eux
+        if [ ! -d /opt/xwin ]; then
+          xwin --accept-license --arch x86 \
+            --crt-version "${WINDOWS_CRT_VERSION}" \
+            --sdk-version "${WINDOWS_SDK_VERSION}" \
+            splat --output /opt/xwin --include-debug-libs
+        fi
+        # Quick sanity
+        test -d /opt/xwin/crt/include
+        test -d /opt/xwin/sdk/include/um
 
-          # --- cc wrapper (auto-detect clang-cl/clang) ---
-          cat > /opt/xwin/bin/cc << 'EOF'
-          #!/usr/bin/env bash
-          set -e
-          # Pick a CL-mode compiler: prefer clang-cl-18, then clang-cl, else clang --driver-mode=cl
-          if command -v clang-cl-18 >/dev/null 2>&1; then
-            CC=clang-cl-18
-            EXTRA=()
-          elif command -v clang-cl >/dev/null 2>&1; then
-            CC=clang-cl
-            EXTRA=()
-          else
-            CC=clang
-            EXTRA=(--driver-mode=cl)
-          fi
+    - name: Build case-insensitive shim and wrappers (cc/lib/link/rc)
+      run: |
+        set -eux
+        mkdir -p /opt/xwin/bin
 
-          # Translate common GCC-ish flags that CMake might pass
-          args_out=()
-          skip_next=0
-          for ((i=1; i<=$#; ++i)); do
-            if [[ $skip_next -eq 1 ]]; then
-              skip_next=0
-              continue
-            fi
-            a="${!i}"
-            case "$a" in
-              --) ;;                               # drop
-              -c) args_out+=("/c");;
-              -MD|-MMD|-MDd) ;;                    # drop depfile flags
-              -MF) skip_next=1;;                   # drop depfile path
-              -D*) args_out+=("/D${a:2}");;
-              -I*)
-                inc="${a:2}"
-                if [[ -z "$inc" ]]; then
-                  next_i=$((i+1)); inc="${!next_i}"; skip_next=1
-                fi
-                args_out+=("/I" "$inc")
-                ;;
-              -o)
-                next_i=$((i+1)); out="${!next_i}"; args_out+=("/Fo$out"); skip_next=1
-                ;;
-              -O0) args_out+=("/Od");;
-              -O1) args_out+=("/O1");;
-              -O2|-O3) args_out+=("/O2");;
-              -g|-g*|/Zi) args_out+=("/Zi");;
-              -m32) ;;                            # already targeting 32-bit
-              *)
-                args_out+=("$a")
-                ;;
-            esac
-          done
+        # build libinsensitive.so
+        curl -L --fail \
+          "https://gist.githubusercontent.com/19wintersp/084cd0d4810a25c11559107491525655/raw/31fce25c66837af5538857f1624ff7acb409d7a9/insensitive.c" \
+          -o /tmp/insensitive.c
+        cc -O0 -std=c2x -fPIC -shared -o /opt/xwin/bin/libinsensitive.so /tmp/insensitive.c
 
-          exec "$CC" "${EXTRA[@]}" \
-            --target=i686-pc-windows-msvc -m32 \
-            -Wno-microsoft /EHa /showIncludes \
-            /imsvc /opt/xwin/crt/include \
-            /imsvc /opt/xwin/sdk/include/shared \
-            /imsvc /opt/xwin/sdk/include/ucrt \
-            /imsvc /opt/xwin/sdk/include/um \
-            "${args_out[@]}"
-          EOF
+        # cc wrapper
+        cat > /opt/xwin/bin/cc <<'EOF'
+        #!/usr/bin/env bash
+        set -e
+        export LD_PRELOAD=/opt/xwin/bin/libinsensitive.so
+        exec clang-cl-'"${LLVM_VERSION}"' \
+          -Wno-microsoft --target=i686-pc-windows-msvc /EHa /arch:SSE \
+          /imsvc /opt/xwin/crt/include \
+          /imsvc /opt/xwin/sdk/include/shared \
+          /imsvc /opt/xwin/sdk/include/ucrt \
+          /imsvc /opt/xwin/sdk/include/um \
+          "$@"
+        EOF
 
-          # --- lib wrapper ---
-          cat > /opt/xwin/bin/lib << 'EOF'
-          #!/usr/bin/env bash
-          set -e
-          LLDLINK="$(command -v lld-link-18 || command -v lld-link)"
-          exec "$LLDLINK" /lib /machine:X86 \
-            /libpath:/opt/xwin/crt/lib/x86 \
-            /libpath:/opt/xwin/sdk/lib/shared/x86 \
-            /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
-            /libpath:/opt/xwin/sdk/lib/um/x86 \
-            "$@"
-          EOF
+        # lib wrapper
+        cat > /opt/xwin/bin/lib <<'EOF'
+        #!/usr/bin/env bash
+        set -e
+        exec lld-link-'"${LLVM_VERSION}"' /lib \
+          /libpath:/opt/xwin/crt/lib/x86 \
+          /libpath:/opt/xwin/sdk/lib/shared/x86 \
+          /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
+          /libpath:/opt/xwin/sdk/lib/um/x86 \
+          "$@"
+        EOF
 
-          # --- link wrapper ---
-          cat > /opt/xwin/bin/link << 'EOF'
-          #!/usr/bin/env bash
-          set -e
-          LLDLINK="$(command -v lld-link-18 || command -v lld-link)"
-          exec "$LLDLINK" /machine:X86 \
-            /libpath:/opt/xwin/crt/lib/x86 \
-            /libpath:/opt/xwin/sdk/lib/shared/x86 \
-            /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
-            /libpath:/opt/xwin/sdk/lib/um/x86 \
-            "$@"
-          EOF
+        # link wrapper
+        cat > /opt/xwin/bin/link <<'EOF'
+        #!/usr/bin/env bash
+        set -e
+        export LD_PRELOAD=/opt/xwin/bin/libinsensitive.so
+        exec lld-link-'"${LLVM_VERSION}"' \
+          /libpath:/opt/xwin/crt/lib/x86 \
+          /libpath:/opt/xwin/sdk/lib/shared/x86 \
+          /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
+          /libpath:/opt/xwin/sdk/lib/um/x86 \
+          "$@"
+        EOF
 
-          # --- rc wrapper ---
-          cat > /opt/xwin/bin/rc << 'EOF'
-          #!/usr/bin/env bash
-          set -e
-          LLVRC="$(command -v llvm-rc-18 || command -v llvm-rc)"
-          exec "$LLVRC" \
-            /I /opt/xwin/crt/include \
-            /I /opt/xwin/sdk/include/shared \
-            /I /opt/xwin/sdk/include/ucrt \
-            /I /opt/xwin/sdk/include/um \
-            "$@"
-          EOF
+        # rc wrapper
+        cat > /opt/xwin/bin/rc <<'EOF'
+        #!/usr/bin/env bash
+        set -e
+        export LD_PRELOAD=/opt/xwin/bin/libinsensitive.so
+        exec llvm-rc-'"${LLVM_VERSION}"' \
+          /I /opt/xwin/crt/include \
+          /I /opt/xwin/sdk/include/shared \
+          /I /opt/xwin/sdk/include/ucrt \
+          /I /opt/xwin/sdk/include/um \
+          "$@"
+        EOF
 
-          # mt (if available)
-          LLVMT="$(command -v llvm-mt-18 || command -v llvm-mt || true)"
-          if [ -n "$LLVMT" ]; then ln -sf "$LLVMT" /opt/xwin/bin/mt; fi
-          chmod +x /opt/xwin/bin/cc /opt/xwin/bin/lib /opt/xwin/bin/link /opt/xwin/bin/rc
+        # mt symlink (if available)
+        MT_BIN="$(command -v llvm-mt-${LLVM_VERSION} || true)"
+        if [ -n "$MT_BIN" ]; then ln -sf "$MT_BIN" /opt/xwin/bin/mt; fi
 
-          # Toolchain for CMake
-          cat > /opt/xwin/bin/xwin.cmake << 'EOF'
-          set(CMAKE_SYSTEM_NAME Windows)
-          set(CMAKE_C_COMPILER   "/opt/xwin/bin/cc")
-          set(CMAKE_CXX_COMPILER "/opt/xwin/bin/cc")
-          set(CMAKE_AR           "/opt/xwin/bin/lib")
-          set(CMAKE_LINKER       "/opt/xwin/bin/link")
-          set(CMAKE_MT           "/opt/xwin/bin/mt")
-          set(CMAKE_RC_COMPILER  "/opt/xwin/bin/rc")
-          EOF
+        chmod +x /opt/xwin/bin/cc /opt/xwin/bin/lib /opt/xwin/bin/link /opt/xwin/bin/rc
 
-      # ---- Build libcurl (static) for i686 ----
-      - name: Cache curl source
-        id: cache-curl-src
-        uses: actions/cache@v4
-        with:
-          path: curl-src
-          key: curl-src-${{ env.CURL_VERSION }}
+        # CMake toolchain file
+        cat > /opt/xwin/bin/xwin.cmake <<'EOF'
+        set(CMAKE_SYSTEM_NAME Windows)
+        set(CMAKE_AR           "/opt/xwin/bin/lib")
+        set(CMAKE_C_COMPILER   "/opt/xwin/bin/cc")
+        set(CMAKE_CXX_COMPILER "/opt/xwin/bin/cc")
+        set(CMAKE_LINKER       "/opt/xwin/bin/link")
+        set(CMAKE_MT           "/opt/xwin/bin/mt")
+        set(CMAKE_RC_COMPILER  "/opt/xwin/bin/rc")
+        EOF
 
-      - name: Download curl source (if needed)
-        if: steps.cache-curl-src.outputs.cache-hit != 'true'
-        run: |
-          curl -L "https://github.com/curl/curl/releases/download/curl-7_76_1/curl-7.76.1.zip" -o curl.zip
-          unzip -q curl.zip
-          rm curl.zip
-          mv curl-7.76.1 curl-src
+    # ---- Build libcurl from official tarball ----
+    - name: Cache curl source
+      uses: actions/cache@v4
+      with:
+        path: /opt/curl-src
+        key: curl-src-${{ env.CURL_VERSION }}
 
-      - name: Patch curl .rc for llvm-rc (© → (c))
-        run: |
-          set -e
-          sed -i 's/©/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
-          sed -i 's/\\xa9/(c)/g' curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
-          perl -0777 -pe 's/\xC2\xA9/(c)/g' -i curl-src/lib/libcurl.rc curl-src/src/curl.rc || true
+    - name: Download curl source (if needed)
+      if: steps.cache-curl-source.outputs.cache-hit != 'true'
+      id: cache-curl-source
+      run: |
+        set -eux
+        mkdir -p /opt/curl-src
+        curl -L --fail "https://curl.se/download/curl-${CURL_VERSION}.tar.gz" -o /tmp/curl.tar.gz
+        tar -xzf /tmp/curl.tar.gz -C /opt/curl-src --strip-components=1
+        rm -f /tmp/curl.tar.gz
 
-      - name: Cache curl build (static i686)
-        id: cache-curl-build
-        uses: actions/cache@v4
-        with:
-          path: curl-build
-          key: curl-build-i686-static-${{ env.CURL_VERSION }}
+    - name: Patch curl .rc for llvm-rc (© → (c))
+      run: |
+        set -eux
+        sed -i 's/\\xa9/(c)/g' /opt/curl-src/lib/libcurl.rc /opt/curl-src/src/curl.rc || true
+        # compatibility for any literal © occurrences
+        perl -0777 -pe 's/\xC2\xA9/(c)/g' -i /opt/curl-src/lib/libcurl.rc /opt/curl-src/src/curl.rc || true
 
-      - name: Build libcurl (static, i686)
-        if: steps.cache-curl-build.outputs.cache-hit != 'true'
-        run: |
-          cmake -S curl-src -B curl-build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=/opt/xwin/bin/xwin.cmake \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_CURL_EXE=OFF \
-            -DBUILD_TESTING=OFF
-          cmake --build curl-build --parallel
+    - name: Configure & Build libcurl (static)
+      run: |
+        set -eux
+        cmake -S /opt/curl-src -B /opt/curl-build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
+          -DBUILD_CURL_EXE=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF \
+          -DCURL_CA_PATH=none -DCURL_USE_LIBPSL=OFF
+        cmake --build /opt/curl-build --parallel
 
-      - name: Export curl paths for CMake
-        run: |
-          echo "CURL_INCLUDEDIR=$GITHUB_WORKSPACE/curl-src/include" >> $GITHUB_ENV
-          echo "CURL_LIBRARYDIR=$GITHUB_WORKSPACE/curl-build/lib"   >> $GITHUB_ENV
+        # provide libcurl_a.lib names for projects that expect them
+        cd /opt/curl-build/lib
+        if [ -f libcurl_imp.lib ]; then
+          cp -f libcurl_imp.lib libcurl_a.lib
+          cp -f libcurl_imp.lib libcurl_a_debug.lib
+        fi
 
-      # ---- Configure & Build the project (Win32) ----
-      - name: Configure Project (Win32, Ninja, static curl)
-        run: |
-          cmake -S . -B build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=/opt/xwin/bin/xwin.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_STANDARD=20 \
-            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-            -DCMAKE_CXX_EXTENSIONS=OFF \
-            -DCURL_INCLUDEDIR="${CURL_INCLUDEDIR}" \
-            -DCURL_LIBDIR="${CURL_LIBRARYDIR}" \
-            -DCURL_LIBRARYDIR="${CURL_LIBRARYDIR}" \
-            -DBUILD_TESTING=ON
+    - name: Export curl paths for later steps
+      run: |
+        echo "CURL_INCLUDEDIR=/opt/curl-src/include" >> $GITHUB_ENV
+        echo "CURL_LIBRARYDIR=/opt/curl-build/lib"   >> $GITHUB_ENV
+        echo "CURL_DEBUG_LIBRARYDIR=/opt/curl-build/lib" >> $GITHUB_ENV
 
-      - name: Build (Ninja)
-        run: cmake --build build --parallel
+    # ---- Configure & Build your repo with the xwin toolchain ----
+    - name: Configure project (Win32, Ninja, static curl)
+      run: |
+        set -eux
+        cmake -S . -B build -G Ninja \
+          -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_STANDARD=20 \
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+          -DCMAKE_CXX_EXTENSIONS=OFF \
+          -DCURL_INCLUDEDIR="${CURL_INCLUDEDIR}" \
+          -DCURL_LIBDIR="${CURL_LIBRARYDIR}" \
+          -DCURL_LIBRARYDIR="${CURL_LIBRARYDIR}" \
+          -DBUILD_TESTING=ON
 
-      - name: Ensure EuroScope shim next to test EXEs
-        run: |
-          if [ -f build/src/plugin/bin/EuroScopePlugInDll.dll ] && [ -d build/bin ]; then
-            cp -f build/src/plugin/bin/EuroScopePlugInDll.dll build/bin/ || true
-          fi
+    - name: Build (Ninja)
+      run: cmake --build build --parallel
 
-      - name: Upload Cross Build Tree
-        uses: actions/upload-artifact@v4
-        with:
-          name: ukcp-build-tree-cross
-          path: build
-
-      - name: Upload Core DLL
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: UKControllerPluginCore.dll
-          path: build/bin/UKControllerPluginCore.dll
-
-      - name: Upload Updater DLL
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: UKControllerPluginUpdater.dll
-          path: build/bin/UKControllerPluginUpdater.dll
-
-      - name: Upload Loader DLL
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: UKControllerPlugin.dll
-          path: build/bin/UKControllerPlugin.dll
-
+    - name: Upload build tree (for Windows tests)
+      uses: actions/upload-artifact@v4
+      with:
+        name: ukcp-build-tree-cross
+        path: build
   # ----------- WINDOWS TESTS ON CROSS BUILD -----------
   windows-cross-tests:
     name: Windows Tests (Cross-Built)
