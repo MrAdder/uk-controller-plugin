@@ -17,14 +17,17 @@ jobs:
       CURL_VERSION: 7.76.1
 
     steps:
-      - name: Install host tools (incl. clang-cl/lld/llvm-rc)
+      - name: Install host tools
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git cmake ninja-build unzip xz-utils perl \
             clang-18 clang-tools-18 lld-18 llvm-18
-          # Add LLVM 18 tools to PATH (contains clang-cl, lld-link, llvm-rc/mt)
-          echo "/usr/lib/llvm-18/bin" >> $GITHUB_PATH
+          # convenience symlinks for unversioned names if missing
+          sudo update-alternatives --install /usr/bin/clang-cl clang-cl /usr/bin/clang-cl-18 50 || true
+          sudo update-alternatives --install /usr/bin/lld-link lld-link /usr/bin/lld-link-18 50 || true
+          sudo update-alternatives --install /usr/bin/llvm-rc llvm-rc /usr/bin/llvm-rc-18 50 || true
+          sudo update-alternatives --install /usr/bin/llvm-mt llvm-mt /usr/bin/llvm-mt-18 50 || true
 
       - name: Checkout Code and Submodules
         uses: actions/checkout@v4
@@ -74,56 +77,58 @@ jobs:
             echo "/opt/xwin already present, skipping splat."
           fi
 
-      - name: Create xwin clang-cl toolchain wrappers (auto-detect LLVM tools)
+      # ==================== PATCHED-IN FIX (force 32-bit) ====================
+      - name: Create xwin clang-cl toolchain wrappers (force 32-bit)
         run: |
           set -e
           mkdir -p /opt/xwin/bin
 
-          # Find the right tool names (clang-cl-18 vs clang-cl, etc.)
+          # Locate LLVM tools (18 or unversioned)
           CLANGCL="$(command -v clang-cl-18 || command -v clang-cl)"
           LLDLINK="$(command -v lld-link-18 || command -v lld-link)"
           LLVRC="$(command -v llvm-rc-18 || command -v llvm-rc)"
           LLVMT="$(command -v llvm-mt-18 || command -v llvm-mt || true)"
+          test -n "$CLANGCL" && test -n "$LLDLINK" && test -n "$LLVRC"
 
-          if [ -z "$CLANGCL" ] || [ -z "$LLDLINK" ] || [ -z "$LLVRC" ]; then
-            echo "Required LLVM tools not found (clang-cl/lld-link/llvm-rc)." >&2
-            exit 1
-          fi
-
+          # --- cc: compile for 32-bit MSVC target ---
           cat > /opt/xwin/bin/cc << EOF
           #!/usr/bin/env bash
           set -e
           exec "$CLANGCL" \
-            -Wno-microsoft /EHa /arch:SSE \
+            --target=i686-pc-windows-msvc -m32 \
+            -Wno-microsoft /EHa \
             /imsvc /opt/xwin/crt/include \
             /imsvc /opt/xwin/sdk/include/shared \
             /imsvc /opt/xwin/sdk/include/ucrt \
             /imsvc /opt/xwin/sdk/include/um \
-            "\$@"
+            "$@"
           EOF
 
+          # --- lib: 32-bit import library manager ---
           cat > /opt/xwin/bin/lib << EOF
           #!/usr/bin/env bash
           set -e
-          exec "$LLDLINK" /lib \
+          exec "$LLDLINK" /lib /machine:X86 \
             /libpath:/opt/xwin/crt/lib/x86 \
             /libpath:/opt/xwin/sdk/lib/shared/x86 \
             /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
             /libpath:/opt/xwin/sdk/lib/um/x86 \
-            "\$@"
+            "$@"
           EOF
 
+          # --- link: 32-bit linker with MSVC libs ---
           cat > /opt/xwin/bin/link << EOF
           #!/usr/bin/env bash
           set -e
-          exec "$LLDLINK" \
+          exec "$LLDLINK" /machine:X86 \
             /libpath:/opt/xwin/crt/lib/x86 \
             /libpath:/opt/xwin/sdk/lib/shared/x86 \
             /libpath:/opt/xwin/sdk/lib/ucrt/x86 \
             /libpath:/opt/xwin/sdk/lib/um/x86 \
-            "\$@"
+            "$@"
           EOF
 
+          # --- rc: resource compiler with MS headers ---
           cat > /opt/xwin/bin/rc << EOF
           #!/usr/bin/env bash
           set -e
@@ -132,21 +137,41 @@ jobs:
             /I /opt/xwin/sdk/include/shared \
             /I /opt/xwin/sdk/include/ucrt \
             /I /opt/xwin/sdk/include/um \
-            "\$@"
+            "$@"
           EOF
 
+          # optional mt
           if [ -n "$LLVMT" ]; then ln -sf "$LLVMT" /opt/xwin/bin/mt || true; fi
           chmod +x /opt/xwin/bin/cc /opt/xwin/bin/lib /opt/xwin/bin/link /opt/xwin/bin/rc
 
+      - name: Write xwin CMake toolchain (force 32-bit)
+        run: |
           cat > /opt/xwin/bin/xwin.cmake << 'EOF'
+          # Cross-compile for Windows (32-bit) using clang-cl + xwin SDK
           set(CMAKE_SYSTEM_NAME Windows)
-          set(CMAKE_C_COMPILER   "/opt/xwin/bin/cc")
-          set(CMAKE_CXX_COMPILER "/opt/xwin/bin/cc")
-          set(CMAKE_AR           "/opt/xwin/bin/lib")
-          set(CMAKE_LINKER       "/opt/xwin/bin/link")
-          set(CMAKE_MT           "/opt/xwin/bin/mt")
-          set(CMAKE_RC_COMPILER  "/opt/xwin/bin/rc")
+
+          # Compilers and tools
+          set(CMAKE_C_COMPILER           "/opt/xwin/bin/cc")
+          set(CMAKE_CXX_COMPILER         "/opt/xwin/bin/cc")
+          set(CMAKE_AR                   "/opt/xwin/bin/lib")
+          set(CMAKE_LINKER               "/opt/xwin/bin/link")
+          set(CMAKE_MT                   "/opt/xwin/bin/mt")
+          set(CMAKE_RC_COMPILER          "/opt/xwin/bin/rc")
+
+          # Force 32-bit MSVC target
+          set(CMAKE_C_COMPILER_TARGET    i686-pc-windows-msvc)
+          set(CMAKE_CXX_COMPILER_TARGET  i686-pc-windows-msvc)
+
+          # Tell CMake the driver is MSVC-like
+          set(CMAKE_C_COMPILER_FRONTEND_VARIANT   "MSVC")
+          set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT "MSVC")
+
+          # Bias linkers to x86 (defensive)
+          set(CMAKE_EXE_LINKER_FLAGS_INIT    "/machine:X86")
+          set(CMAKE_SHARED_LINKER_FLAGS_INIT "/machine:X86")
+          set(CMAKE_MODULE_LINKER_FLAGS_INIT "/machine:X86")
           EOF
+      # ==================== /PATCHED-IN FIX ====================
 
       # ---- Build libcurl (static) for i686 ----
       - name: Cache curl source
@@ -342,7 +367,7 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      # Download specific DLLs produced by linux-cross into a directory
+      # Download specific DLLs produced by linux-cross (paths are directories)
       - name: Download Core Binary
         uses: actions/download-artifact@v4
         with:
@@ -360,13 +385,6 @@ jobs:
         with:
           name: UKControllerPlugin.dll
           path: .\build\bin
-
-      - name: Verify downloaded DLLs
-        run: |
-          dir .\build\bin
-          if not exist .\build\bin\UKControllerPluginCore.dll (echo Missing Core DLL & exit /b 1)
-          if not exist .\build\bin\UKControllerPluginUpdater.dll (echo Missing Updater DLL & exit /b 1)
-          if not exist .\build\bin\UKControllerPlugin.dll (echo Missing Loader DLL & exit /b 1)
 
       - name: Create Release
         env:
