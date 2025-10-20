@@ -11,9 +11,7 @@ jobs:
     name: Linux Cross-Build (Win32 via xwin + clang-cl)
     runs-on: ubuntu-24.04
     env:
-      # xwin version – we’ll probe SDK versions at runtime
       XWIN_VERSION: 0.6.5
-      # curl we embed/build statically for Win32
       CURL_VERSION: 7.76.1
 
     steps:
@@ -21,21 +19,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git cmake ninja-build unzip xz-utils perl \
-            clang-18 clang-tools-18 lld-18 llvm-18
-          # convenience symlinks for unversioned names if missing
-          sudo update-alternatives --install /usr/bin/clang-cl clang-cl /usr/bin/clang-cl-18 50 || true
-          sudo update-alternatives --install /usr/bin/lld-link lld-link /usr/bin/lld-link-18 50 || true
-          sudo update-alternatives --install /usr/bin/llvm-rc llvm-rc /usr/bin/llvm-rc-18 50 || true
-          sudo update-alternatives --install /usr/bin/llvm-mt llvm-mt /usr/bin/llvm-mt-18 50 || true
+            ca-certificates curl git cmake ninja-build unzip xz-utils perl
 
       - name: Checkout Code and Submodules
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # Cache the xwin payloads (MSVC CRT/SDK files)
-      - name: Cache xwin cache dir
+      - name: Cache xwin payloads
         uses: actions/cache@v4
         with:
           path: ~/.xwin-cache
@@ -60,7 +51,6 @@ jobs:
           set -e
           mkdir -p ~/.xwin-cache
           if [ ! -d "/opt/xwin" ]; then
-            # Try these in order; first one that succeeds wins
             SDKS="10.0.26100 10.0.22621 10.0.22000 10.0.19041"
             for v in $SDKS; do
               echo "Attempting xwin splat with SDK $v..."
@@ -77,34 +67,67 @@ jobs:
             echo "/opt/xwin already present, skipping splat."
           fi
 
-      # ==================== PATCHED-IN FIX (force 32-bit) ====================
-      - name: Create xwin clang-cl toolchain wrappers (force 32-bit)
+      - name: Create xwin clang-cl toolchain wrappers (with GCC→MSVC flag translation)
         run: |
           set -e
           mkdir -p /opt/xwin/bin
 
-          # Locate LLVM tools (18 or unversioned)
           CLANGCL="$(command -v clang-cl-18 || command -v clang-cl)"
           LLDLINK="$(command -v lld-link-18 || command -v lld-link)"
           LLVRC="$(command -v llvm-rc-18 || command -v llvm-rc)"
           LLVMT="$(command -v llvm-mt-18 || command -v llvm-mt || true)"
           test -n "$CLANGCL" && test -n "$LLDLINK" && test -n "$LLVRC"
 
-          # --- cc: compile for 32-bit MSVC target ---
-          cat > /opt/xwin/bin/cc << EOF
+          # --- cc wrapper ---
+          cat > /opt/xwin/bin/cc << 'EOF'
           #!/usr/bin/env bash
           set -e
-          exec "$CLANGCL" \
+          args_out=()
+          skip_next=0
+          for ((i=1; i<=$#; ++i)); do
+            if [[ $skip_next -eq 1 ]]; then
+              skip_next=0
+              continue
+            fi
+            a="${!i}"
+            case "$a" in
+              --) ;;                               # drop
+              -c) args_out+=("/c");;               # compile only
+              -MD|-MMD|-MDd) ;;                    # drop depfile flags (use /showIncludes)
+              -MF) skip_next=1;;                   # drop depfile path
+              -D*) args_out+=("/D${a:2}");;        # defines
+              -I*)
+                inc="${a:2}"
+                if [[ -z "$inc" ]]; then
+                  next_i=$((i+1)); inc="${!next_i}"; skip_next=1
+                fi
+                args_out+=("/I" "$inc")
+                ;;
+              -o)
+                next_i=$((i+1)); out="${!next_i}"; args_out+=("/Fo$out"); skip_next=1
+                ;;
+              -O0) args_out+=("/Od");;
+              -O1) args_out+=("/O1");;
+              -O2|-O3) args_out+=("/O2");;
+              -g|-g*|/Zi) args_out+=("/Zi");;
+              -m32) ;;                            # target forces 32-bit already
+              *)
+                args_out+=("$a")
+                ;;
+            esac
+          done
+
+          exec clang-cl \
             --target=i686-pc-windows-msvc -m32 \
-            -Wno-microsoft /EHa \
+            -Wno-microsoft /EHa /showIncludes \
             /imsvc /opt/xwin/crt/include \
             /imsvc /opt/xwin/sdk/include/shared \
             /imsvc /opt/xwin/sdk/include/ucrt \
             /imsvc /opt/xwin/sdk/include/um \
-            "$@"
+            "${args_out[@]}"
           EOF
 
-          # --- lib: 32-bit import library manager ---
+          # --- lib wrapper ---
           cat > /opt/xwin/bin/lib << EOF
           #!/usr/bin/env bash
           set -e
@@ -116,7 +139,7 @@ jobs:
             "$@"
           EOF
 
-          # --- link: 32-bit linker with MSVC libs ---
+          # --- link wrapper ---
           cat > /opt/xwin/bin/link << EOF
           #!/usr/bin/env bash
           set -e
@@ -128,7 +151,7 @@ jobs:
             "$@"
           EOF
 
-          # --- rc: resource compiler with MS headers ---
+          # --- rc wrapper ---
           cat > /opt/xwin/bin/rc << EOF
           #!/usr/bin/env bash
           set -e
@@ -140,38 +163,19 @@ jobs:
             "$@"
           EOF
 
-          # optional mt
           if [ -n "$LLVMT" ]; then ln -sf "$LLVMT" /opt/xwin/bin/mt || true; fi
           chmod +x /opt/xwin/bin/cc /opt/xwin/bin/lib /opt/xwin/bin/link /opt/xwin/bin/rc
 
-      - name: Write xwin CMake toolchain (force 32-bit)
-        run: |
+          # Toolchain file for CMake
           cat > /opt/xwin/bin/xwin.cmake << 'EOF'
-          # Cross-compile for Windows (32-bit) using clang-cl + xwin SDK
           set(CMAKE_SYSTEM_NAME Windows)
-
-          # Compilers and tools
-          set(CMAKE_C_COMPILER           "/opt/xwin/bin/cc")
-          set(CMAKE_CXX_COMPILER         "/opt/xwin/bin/cc")
-          set(CMAKE_AR                   "/opt/xwin/bin/lib")
-          set(CMAKE_LINKER               "/opt/xwin/bin/link")
-          set(CMAKE_MT                   "/opt/xwin/bin/mt")
-          set(CMAKE_RC_COMPILER          "/opt/xwin/bin/rc")
-
-          # Force 32-bit MSVC target
-          set(CMAKE_C_COMPILER_TARGET    i686-pc-windows-msvc)
-          set(CMAKE_CXX_COMPILER_TARGET  i686-pc-windows-msvc)
-
-          # Tell CMake the driver is MSVC-like
-          set(CMAKE_C_COMPILER_FRONTEND_VARIANT   "MSVC")
-          set(CMAKE_CXX_COMPILER_FRONTEND_VARIANT "MSVC")
-
-          # Bias linkers to x86 (defensive)
-          set(CMAKE_EXE_LINKER_FLAGS_INIT    "/machine:X86")
-          set(CMAKE_SHARED_LINKER_FLAGS_INIT "/machine:X86")
-          set(CMAKE_MODULE_LINKER_FLAGS_INIT "/machine:X86")
+          set(CMAKE_C_COMPILER   "/opt/xwin/bin/cc")
+          set(CMAKE_CXX_COMPILER "/opt/xwin/bin/cc")
+          set(CMAKE_AR           "/opt/xwin/bin/lib")
+          set(CMAKE_LINKER       "/opt/xwin/bin/link")
+          set(CMAKE_MT           "/opt/xwin/bin/mt")
+          set(CMAKE_RC_COMPILER  "/opt/xwin/bin/rc")
           EOF
-      # ==================== /PATCHED-IN FIX ====================
 
       # ---- Build libcurl (static) for i686 ----
       - name: Cache curl source
@@ -367,7 +371,7 @@ jobs:
       - name: Install Assets
         run: yarn
 
-      # Download specific DLLs produced by linux-cross (paths are directories)
+      # Pull DLLs produced by linux-cross into a standard location
       - name: Download Core Binary
         uses: actions/download-artifact@v4
         with:
