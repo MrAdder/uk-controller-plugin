@@ -258,7 +258,7 @@ jobs:
       - name: Move build tree into place
         run: |
           if not exist build mkdir build
-          robocopy ukcp-build-tree-cross build /E || exit /B 0
+          cmd /c "if not exist build mkdir build && robocopy ukcp-build-tree-cross build /E || exit /B 0"
 
       - name: Run Tests (ctest)
         working-directory: build
