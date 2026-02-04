@@ -3,8 +3,11 @@ name: Build
 on:
   push:
     branches:
-      - "*"
-      - "**"
+      - "main"
+      - "alpha"
+      - "beta"
+  pull_request:
+
 jobs:
   build:
     name: Build
