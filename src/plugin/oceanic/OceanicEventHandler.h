@@ -1,5 +1,6 @@
 #pragma once
 #include "Clearance.h"
+#include "flightplan/FlightPlanEventHandlerInterface.h"
 #include "tag/TagItemInterface.h"
 #include "timedevent/AbstractTimedEvent.h"
 
@@ -25,7 +26,9 @@ namespace UKControllerPlugin::Oceanic {
     /*
         Handles events over the ocean
     */
-    class OceanicEventHandler : public TimedEvent::AbstractTimedEvent, public Tag::TagItemInterface
+    class OceanicEventHandler : public TimedEvent::AbstractTimedEvent,
+                                public Tag::TagItemInterface,
+                                public Flightplan::FlightPlanEventHandlerInterface
     {
         public:
         OceanicEventHandler(
@@ -34,6 +37,11 @@ namespace UKControllerPlugin::Oceanic {
             Dialog::DialogManager& dialogManager);
 
         void TimedEventTrigger() override;
+        void FlightPlanEvent(
+            Euroscope::EuroScopeCFlightPlanInterface& flightPlan,
+            Euroscope::EuroScopeCRadarTargetInterface& radarTarget) override;
+        void FlightPlanDisconnectEvent(Euroscope::EuroScopeCFlightPlanInterface& flightPlan) override;
+        void ControllerFlightPlanDataEvent(Euroscope::EuroScopeCFlightPlanInterface& flightPlan, int dataType) override;
         [[nodiscard]] static auto NattrakClearanceValid(const nlohmann::json& clearance) -> bool;
         [[nodiscard]] auto CountClearances() const -> size_t;
         [[nodiscard]] auto GetClearanceForCallsign(const std::string& callsign) const -> const Clearance&;
@@ -96,5 +104,17 @@ namespace UKControllerPlugin::Oceanic {
 
         // Protects the map during updates
         mutable std::mutex clearanceMapMutex;
+
+        // --- Detailed natTrak CLX endpoint (recommended for plugins) ---
+        const std::string nattrakClxUrl = "https://nattrak.vatsim.net/api/clx-messages";
+
+        // CLX refresh on assume:
+        void RefreshClxForCallsignAsync_(const std::string& callsign);
+        std::optional<Clearance> BuildClearanceFromClx_(const nlohmann::json& json);
+
+        // Debounce to avoid hammering natTrak if ES fires multiple FP events.
+        std::unordered_map<std::string, std::chrono::steady_clock::time_point> lastAssumeClxFetch_;
+        static constexpr std::chrono::seconds ASSUME_CLX_DEBOUNCE{10};
+        bool ShouldFetchClxNow_(const std::string& callsign);
     };
 } // namespace UKControllerPlugin::Oceanic
