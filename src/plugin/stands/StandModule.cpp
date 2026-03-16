@@ -5,6 +5,7 @@
 #include "bootstrap/PersistenceContainer.h"
 #include "dependency/DependencyLoaderInterface.h"
 #include "euroscope/CallbackFunction.h"
+#include "euroscope/UserSettingAwareCollection.h"
 #include "flightplan/FlightPlanEventHandlerCollection.h"
 #include "integration/ExternalMessageEventHandler.h"
 #include "integration/InboundIntegrationMessageHandler.h"
@@ -43,6 +44,7 @@ namespace UKControllerPlugin::Stands {
             container.airfieldOwnership,
             stands,
             standSelectedCallbackId);
+        container.userSettingHandlers->RegisterHandler(eventHandler);
 
         // Create a tag function for the stand assignment popup list and add a callback
         TagFunction openStandAssignmentPopupMenu(

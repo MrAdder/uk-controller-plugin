@@ -140,5 +140,45 @@ namespace UKControllerPluginTest {
 
             LoadDefaultUserSettings(this->userSetting);
         }
+
+        TEST_F(LoadDefaultUserSettingsTest, ItSetsDefaultPilotRequestedStandColour)
+        {
+            this->SetExpectation(
+                GeneralSettingsEntries::standPilotRequestedColourKey,
+                GeneralSettingsEntries::standPilotRequestedColourDescription,
+                "255,153,255");
+
+            LoadDefaultUserSettings(this->userSetting);
+        }
+
+        TEST_F(LoadDefaultUserSettingsTest, ItSetsDefaultPilotRequestedUnavailableStandColour)
+        {
+            this->SetExpectation(
+                GeneralSettingsEntries::standPilotRequestedUnavailableColourKey,
+                GeneralSettingsEntries::standPilotRequestedUnavailableColourDescription,
+                "255,87,51");
+
+            LoadDefaultUserSettings(this->userSetting);
+        }
+
+        TEST_F(LoadDefaultUserSettingsTest, ItSetsDefaultVaaStandColour)
+        {
+            this->SetExpectation(
+                GeneralSettingsEntries::standVaaAssignmentColourKey,
+                GeneralSettingsEntries::standVaaAssignmentColourDescription,
+                "102,255,255");
+
+            LoadDefaultUserSettings(this->userSetting);
+        }
+
+        TEST_F(LoadDefaultUserSettingsTest, ItSetsDefaultSystemAutoStandColour)
+        {
+            this->SetExpectation(
+                GeneralSettingsEntries::standSystemAutoColourKey,
+                GeneralSettingsEntries::standSystemAutoColourDescription,
+                "255,215,0");
+
+            LoadDefaultUserSettings(this->userSetting);
+        }
     } // namespace Euroscope
 } // namespace UKControllerPluginTest

@@ -9,6 +9,8 @@
 #include "euroscope/EuroScopeCFlightPlanInterface.h"
 #include "euroscope/EuroScopeCRadarTargetInterface.h"
 #include "euroscope/EuroscopePluginLoopbackInterface.h"
+#include "euroscope/GeneralSettingsEntries.h"
+#include "euroscope/UserSetting.h"
 #include "ownership/AirfieldServiceProviderCollection.h"
 #include "tag/TagData.h"
 #include "task/TaskRunnerInterface.h"
@@ -19,6 +21,8 @@ using UKControllerPlugin::Euroscope::EuroScopeCControllerInterface;
 using UKControllerPlugin::Euroscope::EuroScopeCFlightPlanInterface;
 using UKControllerPlugin::Euroscope::EuroScopeCRadarTargetInterface;
 using UKControllerPlugin::Euroscope::EuroscopePluginLoopbackInterface;
+using UKControllerPlugin::Euroscope::GeneralSettingsEntries;
+using UKControllerPlugin::Euroscope::UserSetting;
 using UKControllerPlugin::Plugin::PopupMenuItem;
 using UKControllerPlugin::Push::PushEventSubscription;
 using UKControllerPlugin::TaskManager::TaskRunnerInterface;
@@ -37,6 +41,10 @@ namespace UKControllerPlugin::Stands {
 
             if (assignmentSource == "reservation_allocator") {
                 return StandAssignmentType::PILOT_REQUESTED;
+            }
+
+            if (assignmentSource == "system_auto") {
+                return StandAssignmentType::SYSTEM_AUTO;
             }
 
             if (assignmentSource == "vaa_allocator") {
@@ -58,15 +66,17 @@ namespace UKControllerPlugin::Stands {
         return StandAssignmentType::STANDARD;
     }
 
-    auto StandEventHandler::GetTagColourForAssignmentType(StandAssignmentType assignmentType) -> COLORREF
+    auto StandEventHandler::GetTagColourForAssignmentType(StandAssignmentType assignmentType) const -> COLORREF
     {
         switch (assignmentType) {
         case StandAssignmentType::PILOT_REQUESTED:
-            return RGB(255, 153, 255);
+            return this->pilotRequestedAssignmentColour;
         case StandAssignmentType::PILOT_REQUESTED_UNAVAILABLE:
-            return RGB(255, 87, 51);
+            return this->pilotRequestedUnavailableAssignmentColour;
         case StandAssignmentType::VAA:
-            return RGB(102, 255, 255);
+            return this->vaaAssignmentColour;
+        case StandAssignmentType::SYSTEM_AUTO:
+            return this->systemAutoAssignmentColour;
         case StandAssignmentType::STANDARD:
         default:
             return 0;
@@ -432,6 +442,19 @@ namespace UKControllerPlugin::Stands {
     void StandEventHandler::ControllerFlightPlanDataEvent(EuroScopeCFlightPlanInterface& flightPlan, int dataType)
     {
         // Nothing to do
+    }
+
+    void StandEventHandler::UserSettingsUpdated(UserSetting& userSettings)
+    {
+        this->pilotRequestedAssignmentColour =
+            userSettings.GetColourEntry(GeneralSettingsEntries::standPilotRequestedColourKey, RGB(255, 153, 255));
+        this->pilotRequestedUnavailableAssignmentColour = userSettings.GetColourEntry(
+            GeneralSettingsEntries::standPilotRequestedUnavailableColourKey,
+            RGB(255, 87, 51));
+        this->vaaAssignmentColour =
+            userSettings.GetColourEntry(GeneralSettingsEntries::standVaaAssignmentColourKey, RGB(102, 255, 255));
+        this->systemAutoAssignmentColour =
+            userSettings.GetColourEntry(GeneralSettingsEntries::standSystemAutoColourKey, RGB(255, 215, 0));
     }
 
     void StandEventHandler::PluginEventsSynced()

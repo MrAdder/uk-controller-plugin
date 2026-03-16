@@ -36,5 +36,20 @@ namespace UKControllerPlugin {
         const std::string GeneralSettingsEntries::initialHeadingToggleSettingsKey = "autoAssignInitialHeadings";
         const std::string GeneralSettingsEntries::initialHeadingToggleSettingsDescription =
             "Automatically assign initial headings";
+
+        // STAND TAG COLOURS
+        const std::string GeneralSettingsEntries::standPilotRequestedColourKey = "standPilotRequestedColour";
+        const std::string GeneralSettingsEntries::standPilotRequestedColourDescription =
+            "Stand TAG colour for pilot-requested stand assignments";
+        const std::string GeneralSettingsEntries::standPilotRequestedUnavailableColourKey =
+            "standPilotRequestedUnavailableColour";
+        const std::string GeneralSettingsEntries::standPilotRequestedUnavailableColourDescription =
+            "Stand TAG colour for unavailable pilot-requested stand assignments";
+        const std::string GeneralSettingsEntries::standVaaAssignmentColourKey = "standVaaAssignmentColour";
+        const std::string GeneralSettingsEntries::standVaaAssignmentColourDescription =
+            "Stand TAG colour for VAA stand assignments";
+        const std::string GeneralSettingsEntries::standSystemAutoColourKey = "standSystemAutoColour";
+        const std::string GeneralSettingsEntries::standSystemAutoColourDescription =
+            "Stand TAG colour for non-requested automatic stand assignments";
     } // namespace Euroscope
 } // namespace UKControllerPlugin

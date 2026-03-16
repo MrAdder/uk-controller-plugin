@@ -54,6 +54,41 @@ namespace UKControllerPlugin {
                     GeneralSettingsEntries::unknownTimeFormatBlankDescription,
                     false);
             }
+
+            // Stand assignment colours
+            if (!userSetting.HasEntry(GeneralSettingsEntries::standPilotRequestedColourKey)) {
+                LogInfo("Loading default value for setting " + GeneralSettingsEntries::standPilotRequestedColourKey);
+                userSetting.Save(
+                    GeneralSettingsEntries::standPilotRequestedColourKey,
+                    GeneralSettingsEntries::standPilotRequestedColourDescription,
+                    RGB(255, 153, 255));
+            }
+
+            if (!userSetting.HasEntry(GeneralSettingsEntries::standPilotRequestedUnavailableColourKey)) {
+                LogInfo(
+                    "Loading default value for setting " +
+                    GeneralSettingsEntries::standPilotRequestedUnavailableColourKey);
+                userSetting.Save(
+                    GeneralSettingsEntries::standPilotRequestedUnavailableColourKey,
+                    GeneralSettingsEntries::standPilotRequestedUnavailableColourDescription,
+                    RGB(255, 87, 51));
+            }
+
+            if (!userSetting.HasEntry(GeneralSettingsEntries::standVaaAssignmentColourKey)) {
+                LogInfo("Loading default value for setting " + GeneralSettingsEntries::standVaaAssignmentColourKey);
+                userSetting.Save(
+                    GeneralSettingsEntries::standVaaAssignmentColourKey,
+                    GeneralSettingsEntries::standVaaAssignmentColourDescription,
+                    RGB(102, 255, 255));
+            }
+
+            if (!userSetting.HasEntry(GeneralSettingsEntries::standSystemAutoColourKey)) {
+                LogInfo("Loading default value for setting " + GeneralSettingsEntries::standSystemAutoColourKey);
+                userSetting.Save(
+                    GeneralSettingsEntries::standSystemAutoColourKey,
+                    GeneralSettingsEntries::standSystemAutoColourDescription,
+                    RGB(255, 215, 0));
+            }
         }
     } // namespace Euroscope
 } // namespace UKControllerPlugin

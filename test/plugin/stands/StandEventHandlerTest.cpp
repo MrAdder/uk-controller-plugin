@@ -3,6 +3,8 @@
 #include "api/ApiException.h"
 #include "controller/ActiveCallsign.h"
 #include "controller/ControllerPosition.h"
+#include "euroscope/GeneralSettingsEntries.h"
+#include "euroscope/UserSetting.h"
 #include "ownership/AirfieldServiceProviderCollection.h"
 #include "ownership/ServiceProvision.h"
 #include "stands/StandUnassignedMessage.h"
@@ -17,6 +19,8 @@ using ::testing::Throw;
 using UKControllerPlugin::Api::ApiException;
 using UKControllerPlugin::Integration::InboundMessage;
 using UKControllerPlugin::Integration::MessageType;
+using UKControllerPlugin::Euroscope::GeneralSettingsEntries;
+using UKControllerPlugin::Euroscope::UserSetting;
 using UKControllerPlugin::Plugin::PopupMenuItem;
 using UKControllerPlugin::Push::PushEvent;
 using UKControllerPlugin::Push::PushEventSubscription;
@@ -31,6 +35,7 @@ using UKControllerPluginTest::Euroscope::MockEuroScopeCControllerInterface;
 using UKControllerPluginTest::Euroscope::MockEuroScopeCFlightPlanInterface;
 using UKControllerPluginTest::Euroscope::MockEuroScopeCRadarTargetInterface;
 using UKControllerPluginTest::Euroscope::MockEuroscopePluginLoopbackInterface;
+using UKControllerPluginTest::Euroscope::MockUserSettingProviderInterface;
 using UKControllerPluginTest::Integration::MockOutboundIntegrationEventHandler;
 using UKControllerPluginTest::TaskManager::MockTaskRunnerInterface;
 
@@ -50,6 +55,7 @@ namespace UKControllerPluginTest {
                           "LON_S_CTR", "Test", controller, false)),
                   airfieldOwnership(
                       std::make_shared<UKControllerPlugin::Ownership::AirfieldServiceProviderCollection>()),
+                  userSetting(userSettingProvider),
                   tagData(flightplan, radarTarget, 110, 1, itemString, &euroscopeColourCode, &tagColour, &fontSize),
                   handler(api, taskRunner, plugin, mockIntegration, airfieldOwnership, GetStands(), 1)
             {
@@ -82,6 +88,8 @@ namespace UKControllerPluginTest {
             std::shared_ptr<UKControllerPlugin::Controller::ActiveCallsign> userCallsign;
             std::shared_ptr<UKControllerPlugin::Controller::ActiveCallsign> notUserCallsign;
             std::shared_ptr<UKControllerPlugin::Ownership::AirfieldServiceProviderCollection> airfieldOwnership;
+            NiceMock<MockUserSettingProviderInterface> userSettingProvider;
+            UserSetting userSetting;
             TagData tagData;
             StandEventHandler handler;
         };
@@ -348,6 +356,116 @@ namespace UKControllerPluginTest {
 
             EXPECT_EQ("1L", this->tagData.GetItemString());
             EXPECT_EQ(RGB(255, 153, 255), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItColoursPilotRequestedStandFromAssignmentSourceOnPluginEventsSync)
+        {
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assignment_source", "reservation_allocator"},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ("1L", this->tagData.GetItemString());
+            EXPECT_EQ(RGB(255, 153, 255), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItUsesConfiguredPilotRequestedColour)
+        {
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedColourKey))
+                .WillByDefault(Return("10,20,30"));
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedUnavailableColourKey))
+                .WillByDefault(Return("255,87,51"));
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standVaaAssignmentColourKey))
+                .WillByDefault(Return("102,255,255"));
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standSystemAutoColourKey))
+                .WillByDefault(Return("255,215,0"));
+
+            this->handler.UserSettingsUpdated(this->userSetting);
+
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assignment_source", "reservation_allocator"},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ(RGB(10, 20, 30), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItColoursSystemAutoStandFromAssignmentSource)
+        {
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assignment_source", "system_auto"},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ("1L", this->tagData.GetItemString());
+            EXPECT_EQ(RGB(255, 215, 0), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItUsesConfiguredSystemAutoColour)
+        {
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedColourKey))
+                .WillByDefault(Return("255,153,255"));
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedUnavailableColourKey))
+                .WillByDefault(Return("255,87,51"));
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standVaaAssignmentColourKey))
+                .WillByDefault(Return("102,255,255"));
+            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standSystemAutoColourKey))
+                .WillByDefault(Return("12,34,56"));
+
+            this->handler.UserSettingsUpdated(this->userSetting);
+
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assignment_source", "system_auto"},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ(RGB(12, 34, 56), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItLeavesDefaultTagColourForUserAssignmentSource)
+        {
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assignment_source", "user"},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ("1L", this->tagData.GetItemString());
+            EXPECT_EQ(RGB(255, 255, 255), this->tagData.GetTagColour());
         }
 
         TEST_F(StandEventHandlerTest, ItColoursVaaStandFromAssignmentSourceOnWebsocketMessage)

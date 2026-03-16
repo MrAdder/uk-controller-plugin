@@ -2,6 +2,7 @@
 #include "CompareStands.h"
 #include "Stand.h"
 #include "flightplan/FlightPlanEventHandlerInterface.h"
+#include "euroscope/UserSettingAwareInterface.h"
 #include "integration/ExternalMessageHandlerInterface.h"
 #include "integration/IntegrationActionProcessor.h"
 #include "integration/OutboundIntegrationEventHandler.h"
@@ -27,6 +28,7 @@ namespace UKControllerPlugin::Stands {
     enum class StandAssignmentType
     {
         STANDARD,
+        SYSTEM_AUTO,
         PILOT_REQUESTED,
         PILOT_REQUESTED_UNAVAILABLE,
         VAA,
@@ -38,6 +40,7 @@ namespace UKControllerPlugin::Stands {
     class StandEventHandler : public Tag::TagItemInterface,
                               public Push::PushEventProcessorInterface,
                               public Flightplan::FlightPlanEventHandlerInterface,
+                              public Euroscope::UserSettingAwareInterface,
                               public Integration::ExternalMessageHandlerInterface,
                               public Integration::IntegrationActionProcessor
     {
@@ -94,6 +97,7 @@ namespace UKControllerPlugin::Stands {
         void ControllerFlightPlanDataEvent(
             UKControllerPlugin::Euroscope::EuroScopeCFlightPlanInterface& flightPlan, int dataType) override;
         void PluginEventsSynced() override;
+        void UserSettingsUpdated(UKControllerPlugin::Euroscope::UserSetting& userSettings) override;
 
         // Inherited via ExternalMessageHandlerInterface
         auto ProcessMessage(std::string message) -> bool override;
@@ -115,7 +119,7 @@ namespace UKControllerPlugin::Stands {
         void DoApiStandRequest(const std::string& callsign, const nlohmann::json data);
         void UnassignStandForAircraft(const std::string& callsign);
         [[nodiscard]] static auto GetAssignmentType(const nlohmann::json& message) -> StandAssignmentType;
-        [[nodiscard]] static auto GetTagColourForAssignmentType(StandAssignmentType assignmentType) -> COLORREF;
+        [[nodiscard]] auto GetTagColourForAssignmentType(StandAssignmentType assignmentType) const -> COLORREF;
         [[nodiscard]] auto AssignmentMessageValid(const nlohmann::json& message) const -> bool;
         auto CanAssignStand(UKControllerPlugin::Euroscope::EuroScopeCFlightPlanInterface& flightplan) const -> bool;
         static auto UnassignmentMessageValid(const nlohmann::json& message) -> bool;
@@ -174,5 +178,11 @@ namespace UKControllerPlugin::Stands {
 
         // Max distance from origin to do departure stands
         const double maxDistanceForDepartureStands = 3.5;
+
+        // Runtime-configurable colours for stand assignment sources
+        COLORREF pilotRequestedAssignmentColour = RGB(255, 153, 255);
+        COLORREF pilotRequestedUnavailableAssignmentColour = RGB(255, 87, 51);
+        COLORREF vaaAssignmentColour = RGB(102, 255, 255);
+        COLORREF systemAutoAssignmentColour = RGB(255, 215, 0);
     };
 } // namespace UKControllerPlugin::Stands

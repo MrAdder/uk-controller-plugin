@@ -35,6 +35,16 @@ namespace UKControllerPlugin {
             // Initial Headings
             static const std::string initialHeadingToggleSettingsKey;
             static const std::string initialHeadingToggleSettingsDescription;
+
+            // STAND TAG COLOURS
+            static const std::string standPilotRequestedColourKey;
+            static const std::string standPilotRequestedColourDescription;
+            static const std::string standPilotRequestedUnavailableColourKey;
+            static const std::string standPilotRequestedUnavailableColourDescription;
+            static const std::string standVaaAssignmentColourKey;
+            static const std::string standVaaAssignmentColourDescription;
+            static const std::string standSystemAutoColourKey;
+            static const std::string standSystemAutoColourDescription;
         } GeneralSettingsEntries;
     } // namespace Euroscope
 } // namespace UKControllerPlugin
