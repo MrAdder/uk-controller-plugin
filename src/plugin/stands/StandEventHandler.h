@@ -24,6 +24,14 @@ namespace UKControllerPlugin {
 } // namespace UKControllerPlugin
 
 namespace UKControllerPlugin::Stands {
+    enum class StandAssignmentType
+    {
+        STANDARD,
+        PILOT_REQUESTED,
+        PILOT_REQUESTED_UNAVAILABLE,
+        VAA,
+    };
+
     /*
         Handles events related to stands.
     */
@@ -94,7 +102,10 @@ namespace UKControllerPlugin::Stands {
         inline static const int noStandAssigned = -1;
 
         private:
-        void AssignStandToAircraft(const std::string& callsign, const Stand& stand);
+        void AssignStandToAircraft(
+            const std::string& callsign,
+            const Stand& stand,
+            StandAssignmentType assignmentType = StandAssignmentType::STANDARD);
         [[nodiscard]] auto
         AssignStandInApi(const std::string& callsign, const std::string& airfield, const std::string& identifier)
             -> std::string;
@@ -103,6 +114,8 @@ namespace UKControllerPlugin::Stands {
         void RequestArrivalStandFromApi(const Euroscope::EuroScopeCFlightPlanInterface& flightplan);
         void DoApiStandRequest(const std::string& callsign, const nlohmann::json data);
         void UnassignStandForAircraft(const std::string& callsign);
+        [[nodiscard]] static auto GetAssignmentType(const nlohmann::json& message) -> StandAssignmentType;
+        [[nodiscard]] static auto GetTagColourForAssignmentType(StandAssignmentType assignmentType) -> COLORREF;
         [[nodiscard]] auto AssignmentMessageValid(const nlohmann::json& message) const -> bool;
         auto CanAssignStand(UKControllerPlugin::Euroscope::EuroScopeCFlightPlanInterface& flightplan) const -> bool;
         static auto UnassignmentMessageValid(const nlohmann::json& message) -> bool;
@@ -128,6 +141,9 @@ namespace UKControllerPlugin::Stands {
 
         // The currently assigned stands and who they are assigned to
         std::map<std::string, int> standAssignments;
+
+        // Assignment source/status metadata for each assigned stand
+        std::map<std::string, StandAssignmentType> standAssignmentTypes;
 
         // Locks the stand assignments map to prevent concurrent edits
         std::recursive_mutex mapMutex;

@@ -25,6 +25,54 @@ using UKControllerPlugin::TaskManager::TaskRunnerInterface;
 
 namespace UKControllerPlugin::Stands {
 
+    auto StandEventHandler::GetAssignmentType(const nlohmann::json& message) -> StandAssignmentType
+    {
+        if (message.contains("assignment_status") && message.at("assignment_status").is_string() &&
+            message.at("assignment_status").get<std::string>() == "requested_unavailable") {
+            return StandAssignmentType::PILOT_REQUESTED_UNAVAILABLE;
+        }
+
+        if (message.contains("assignment_source") && message.at("assignment_source").is_string()) {
+            const auto assignmentSource = message.at("assignment_source").get<std::string>();
+
+            if (assignmentSource == "reservation_allocator") {
+                return StandAssignmentType::PILOT_REQUESTED;
+            }
+
+            if (assignmentSource == "vaa_allocator") {
+                return StandAssignmentType::VAA;
+            }
+        }
+
+        if (message.contains("assigned_by_reservation_allocator") &&
+            message.at("assigned_by_reservation_allocator").is_boolean() &&
+            message.at("assigned_by_reservation_allocator").get<bool>()) {
+            return StandAssignmentType::PILOT_REQUESTED;
+        }
+
+        if (message.contains("assigned_by_pilot_request") && message.at("assigned_by_pilot_request").is_boolean() &&
+            message.at("assigned_by_pilot_request").get<bool>()) {
+            return StandAssignmentType::PILOT_REQUESTED;
+        }
+
+        return StandAssignmentType::STANDARD;
+    }
+
+    auto StandEventHandler::GetTagColourForAssignmentType(StandAssignmentType assignmentType) -> COLORREF
+    {
+        switch (assignmentType) {
+        case StandAssignmentType::PILOT_REQUESTED:
+            return RGB(255, 153, 255);
+        case StandAssignmentType::PILOT_REQUESTED_UNAVAILABLE:
+            return RGB(255, 87, 51);
+        case StandAssignmentType::VAA:
+            return RGB(102, 255, 255);
+        case StandAssignmentType::STANDARD:
+        default:
+            return 0;
+        }
+    }
+
     StandEventHandler::StandEventHandler(
         const ApiInterface& api,
         TaskRunnerInterface& taskRunner,
@@ -218,6 +266,7 @@ namespace UKControllerPlugin::Stands {
     void StandEventHandler::SetAssignedStand(const std::string& callsign, int standId)
     {
         this->standAssignments[callsign] = standId;
+        this->standAssignmentTypes[callsign] = StandAssignmentType::STANDARD;
     }
 
     void StandEventHandler::StandSelected(int functionId, std::string context, RECT mousePosition)
@@ -293,6 +342,14 @@ namespace UKControllerPlugin::Stands {
             }
 
             tagData.SetItemString(stand->identifier);
+
+            const auto assignmentType = this->standAssignmentTypes.contains(tagData.GetFlightplan().GetCallsign())
+                                            ? this->standAssignmentTypes.at(tagData.GetFlightplan().GetCallsign())
+                                            : StandAssignmentType::STANDARD;
+
+            if (assignmentType != StandAssignmentType::STANDARD) {
+                tagData.SetTagColour(GetTagColourForAssignmentType(assignmentType));
+            }
         }
     }
 
@@ -391,6 +448,7 @@ namespace UKControllerPlugin::Stands {
                 // Delete all existing assignments
                 auto mapLock = this->LockStandMap();
                 this->standAssignments.clear();
+                this->standAssignmentTypes.clear();
 
                 for (auto assignment = standAssignments.cbegin(); assignment != standAssignments.cend(); ++assignment) {
                     if (!AssignmentMessageValid(*assignment)) {
@@ -398,9 +456,11 @@ namespace UKControllerPlugin::Stands {
                         continue;
                     }
 
+                    const auto assignmentType = this->GetAssignmentType(*assignment);
                     this->AssignStandToAircraft(
                         assignment->at("callsign").get<std::string>(),
-                        *this->stands.find(assignment->at("stand_id").get<int>()));
+                        *this->stands.find(assignment->at("stand_id").get<int>()),
+                        assignmentType);
                 }
                 LogInfo("Loaded " + std::to_string(this->standAssignments.size()) + " stand assignments");
             } catch (ApiException&) {
@@ -422,9 +482,11 @@ namespace UKControllerPlugin::Stands {
                 return;
             }
 
+            const auto assignmentType = this->GetAssignmentType(message.data);
             this->AssignStandToAircraft(
                 message.data.at("callsign").get<std::string>(),
-                *this->stands.find(message.data.at("stand_id").get<int>()));
+                *this->stands.find(message.data.at("stand_id").get<int>()),
+                assignmentType);
         } else if (message.event == "App\\Events\\StandUnassignedEvent") {
             // If a stand has been unassigned, unassign it here
             if (!UnassignmentMessageValid(message.data)) {
@@ -450,14 +512,17 @@ namespace UKControllerPlugin::Stands {
     {
         this->RemoveFlightStripAnnotation(callsign);
         this->standAssignments.erase(callsign);
+        this->standAssignmentTypes.erase(callsign);
         this->integrationEventHandler.SendEvent(std::make_shared<StandUnassignedMessage>(callsign));
         LogInfo("Stand assignment removed for " + callsign);
     }
 
-    void StandEventHandler::AssignStandToAircraft(const std::string& callsign, const Stand& stand)
+    void StandEventHandler::AssignStandToAircraft(
+        const std::string& callsign, const Stand& stand, StandAssignmentType assignmentType)
     {
         this->AnnotateFlightStrip(callsign, stand.id);
         this->standAssignments[callsign] = stand.id;
+        this->standAssignmentTypes[callsign] = assignmentType;
         this->integrationEventHandler.SendEvent(
             std::make_shared<StandAssignedMessage>(callsign, stand.airfieldCode, stand.identifier));
         LogInfo(
@@ -601,7 +666,7 @@ namespace UKControllerPlugin::Stands {
                 const auto& stand = this->stands.find(standId);
                 LogInfo("API generated stand assignment " + std::to_string(standId) + " for " + requestCallsign);
 
-                this->AssignStandToAircraft(requestCallsign, *stand);
+                this->AssignStandToAircraft(requestCallsign, *stand, this->GetAssignmentType(data));
             })
             .Catch([requestCallsign](const UKControllerPluginUtils::Api::ApiRequestException& exception) {
                 LogError("Failed to request stand assignment for " + requestCallsign + ": " + exception.what());

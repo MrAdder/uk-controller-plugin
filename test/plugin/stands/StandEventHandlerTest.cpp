@@ -330,6 +330,56 @@ namespace UKControllerPluginTest {
             ASSERT_EQ(2, this->handler.GetAssignedStandForCallsign("VIR245"));
         }
 
+        TEST_F(StandEventHandlerTest, ItColoursPilotRequestedStandFromLegacyFlagOnPluginEventsSync)
+        {
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assigned_by_pilot_request", true},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ("1L", this->tagData.GetItemString());
+            EXPECT_EQ(RGB(255, 153, 255), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItColoursVaaStandFromAssignmentSourceOnWebsocketMessage)
+        {
+            PushEvent message{
+                "App\\Events\\StandAssignedEvent",
+                "private-stand-assignments",
+                nlohmann::json{{"callsign", "BAW123"}, {"stand_id", 1}, {"assignment_source", "vaa_allocator"}}};
+
+            this->handler.ProcessPushEvent(message);
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ("1L", this->tagData.GetItemString());
+            EXPECT_EQ(RGB(102, 255, 255), this->tagData.GetTagColour());
+        }
+
+        TEST_F(StandEventHandlerTest, ItColoursUnavailablePilotRequestedStandFromAssignmentStatus)
+        {
+            nlohmann::json assignments = nlohmann::json::array();
+            assignments.push_back({
+                {"callsign", "BAW123"},
+                {"stand_id", 1},
+                {"assignment_status", "requested_unavailable"},
+            });
+
+            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+            this->handler.PluginEventsSynced();
+            this->handler.SetTagItemData(this->tagData);
+
+            EXPECT_EQ("1L", this->tagData.GetItemString());
+            EXPECT_EQ(RGB(255, 87, 51), this->tagData.GetTagColour());
+        }
+
         TEST_F(StandEventHandlerTest, ItClearsPreviousAssignmentsOnPluginEventsSync)
         {
             nlohmann::json assignments = nlohmann::json::array();
