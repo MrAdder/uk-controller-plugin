@@ -17,10 +17,10 @@ using ::testing::Return;
 using ::testing::Test;
 using ::testing::Throw;
 using UKControllerPlugin::Api::ApiException;
-using UKControllerPlugin::Integration::InboundMessage;
-using UKControllerPlugin::Integration::MessageType;
 using UKControllerPlugin::Euroscope::GeneralSettingsEntries;
 using UKControllerPlugin::Euroscope::UserSetting;
+using UKControllerPlugin::Integration::InboundMessage;
+using UKControllerPlugin::Integration::MessageType;
 using UKControllerPlugin::Plugin::PopupMenuItem;
 using UKControllerPlugin::Push::PushEvent;
 using UKControllerPlugin::Push::PushEventSubscription;
@@ -47,12 +47,10 @@ namespace UKControllerPluginTest {
             public:
             StandEventHandlerTest()
                 : controller(2, "LON_S_CTR", 129.420, std::vector<std::string>{"EGKK"}, true, false, true),
-                  userCallsign(
-                      std::make_shared<UKControllerPlugin::Controller::ActiveCallsign>(
-                          "LON_S_CTR", "Test", controller, true)),
-                  notUserCallsign(
-                      std::make_shared<UKControllerPlugin::Controller::ActiveCallsign>(
-                          "LON_S_CTR", "Test", controller, false)),
+                  userCallsign(std::make_shared<UKControllerPlugin::Controller::ActiveCallsign>(
+                      "LON_S_CTR", "Test", controller, true)),
+                  notUserCallsign(std::make_shared<UKControllerPlugin::Controller::ActiveCallsign>(
+                      "LON_S_CTR", "Test", controller, false)),
                   airfieldOwnership(
                       std::make_shared<UKControllerPlugin::Ownership::AirfieldServiceProviderCollection>()),
                   userSetting(userSettingProvider),
@@ -71,6 +69,34 @@ namespace UKControllerPluginTest {
                 stands.insert({2, "EGKK", "55"});
                 stands.insert({3, "EGLL", "317"});
                 return stands;
+            }
+
+            void SyncSingleAssignmentAndApplyTag(const nlohmann::json& assignment)
+            {
+                nlohmann::json assignments = nlohmann::json::array();
+                assignments.push_back(assignment);
+
+                EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
+
+                this->handler.PluginEventsSynced();
+                this->handler.SetTagItemData(this->tagData);
+            }
+
+            void SetStandColourSettings(
+                const std::string& pilotRequested,
+                const std::string& pilotRequestedUnavailable,
+                const std::string& vaa,
+                const std::string& systemAuto)
+            {
+                ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedColourKey))
+                    .WillByDefault(Return(pilotRequested));
+                ON_CALL(
+                    this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedUnavailableColourKey))
+                    .WillByDefault(Return(pilotRequestedUnavailable));
+                ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standVaaAssignmentColourKey))
+                    .WillByDefault(Return(vaa));
+                ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standSystemAutoColourKey))
+                    .WillByDefault(Return(systemAuto));
             }
 
             double fontSize = 24.1;
@@ -342,17 +368,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItColoursPilotRequestedStandFromLegacyFlagOnPluginEventsSync)
         {
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assigned_by_pilot_request", true},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ("1L", this->tagData.GetItemString());
             EXPECT_EQ(RGB(255, 153, 255), this->tagData.GetTagColour());
@@ -360,17 +380,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItColoursPilotRequestedStandFromAssignmentSourceOnPluginEventsSync)
         {
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assignment_source", "reservation_allocator"},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ("1L", this->tagData.GetItemString());
             EXPECT_EQ(RGB(255, 153, 255), this->tagData.GetTagColour());
@@ -378,45 +392,26 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItUsesConfiguredPilotRequestedColour)
         {
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedColourKey))
-                .WillByDefault(Return("10,20,30"));
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedUnavailableColourKey))
-                .WillByDefault(Return("255,87,51"));
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standVaaAssignmentColourKey))
-                .WillByDefault(Return("102,255,255"));
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standSystemAutoColourKey))
-                .WillByDefault(Return("255,215,0"));
+            this->SetStandColourSettings("10,20,30", "255,87,51", "102,255,255", "255,215,0");
 
             this->handler.UserSettingsUpdated(this->userSetting);
 
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assignment_source", "reservation_allocator"},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ(RGB(10, 20, 30), this->tagData.GetTagColour());
         }
 
         TEST_F(StandEventHandlerTest, ItColoursSystemAutoStandFromAssignmentSource)
         {
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assignment_source", "system_auto"},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ("1L", this->tagData.GetItemString());
             EXPECT_EQ(RGB(255, 215, 0), this->tagData.GetTagColour());
@@ -424,45 +419,26 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItUsesConfiguredSystemAutoColour)
         {
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedColourKey))
-                .WillByDefault(Return("255,153,255"));
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standPilotRequestedUnavailableColourKey))
-                .WillByDefault(Return("255,87,51"));
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standVaaAssignmentColourKey))
-                .WillByDefault(Return("102,255,255"));
-            ON_CALL(this->userSettingProvider, GetKey(GeneralSettingsEntries::standSystemAutoColourKey))
-                .WillByDefault(Return("12,34,56"));
+            this->SetStandColourSettings("255,153,255", "255,87,51", "102,255,255", "12,34,56");
 
             this->handler.UserSettingsUpdated(this->userSetting);
 
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assignment_source", "system_auto"},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ(RGB(12, 34, 56), this->tagData.GetTagColour());
         }
 
         TEST_F(StandEventHandlerTest, ItLeavesDefaultTagColourForUserAssignmentSource)
         {
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assignment_source", "user"},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ("1L", this->tagData.GetItemString());
             EXPECT_EQ(RGB(255, 255, 255), this->tagData.GetTagColour());
@@ -484,17 +460,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItColoursUnavailablePilotRequestedStandFromAssignmentStatus)
         {
-            nlohmann::json assignments = nlohmann::json::array();
-            assignments.push_back({
+            this->SyncSingleAssignmentAndApplyTag({
                 {"callsign", "BAW123"},
                 {"stand_id", 1},
                 {"assignment_status", "requested_unavailable"},
             });
-
-            EXPECT_CALL(this->api, GetAssignedStands()).Times(1).WillOnce(Return(assignments));
-
-            this->handler.PluginEventsSynced();
-            this->handler.SetTagItemData(this->tagData);
 
             EXPECT_EQ("1L", this->tagData.GetItemString());
             EXPECT_EQ(RGB(255, 87, 51), this->tagData.GetTagColour());
@@ -1676,9 +1646,8 @@ namespace UKControllerPluginTest {
         TEST_F(StandEventHandlerTest, ItUnassignsStandFromIntegrationMessage)
         {
             this->handler.SetAssignedStand("BAW123", 3);
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", {{"callsign", "BAW123"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", {{"callsign", "BAW123"}}}});
 
             EXPECT_CALL(this->api, DeleteStandAssignmentForAircraft("BAW123")).Times(1);
 
@@ -1696,9 +1665,8 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItDoesntUnassignStandFromAircraftFromMessageIfNothingToDo)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", {{"callsign", "BAW123"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", {{"callsign", "BAW123"}}}});
 
             EXPECT_CALL(this->api, DeleteStandAssignmentForAircraft("BAW123")).Times(0);
 
@@ -1717,9 +1685,8 @@ namespace UKControllerPluginTest {
         TEST_F(StandEventHandlerTest, ItDoesntUnassignStandFromAircraftIfBadCallsign)
         {
             this->handler.SetAssignedStand("BAW123", 3);
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", {{"callsign", 123}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", {{"callsign", 123}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1736,9 +1703,8 @@ namespace UKControllerPluginTest {
         TEST_F(StandEventHandlerTest, ItDoesntUnassignStandFromAircraftIfNoCallsign)
         {
             this->handler.SetAssignedStand("BAW123", 3);
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", nlohmann::json::object()}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "unassign_stand"}, {"version", 1}, {"id", "foo"}, {"data", nlohmann::json::object()}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1778,12 +1744,11 @@ namespace UKControllerPluginTest {
 
             EXPECT_CALL(this->api, AssignStandToAircraft("BAW123", 2)).Times(1);
 
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"callsign", "BAW123"}, {"airfield", "EGKK"}, {"stand", "55"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"callsign", "BAW123"}, {"airfield", "EGKK"}, {"stand", "55"}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1801,12 +1766,11 @@ namespace UKControllerPluginTest {
         {
             ON_CALL(this->plugin, GetFlightplanForCallsign("BAW123")).WillByDefault(Return(nullptr));
 
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"callsign", "BAW123"}, {"airfield", "EGKK"}, {"stand", "55"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"callsign", "BAW123"}, {"airfield", "EGKK"}, {"stand", "55"}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1822,12 +1786,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItFailsAssignmentFromMessageIfCallsignMissing)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"airfield", "EGKK"}, {"stand", "55"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"airfield", "EGKK"}, {"stand", "55"}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1843,12 +1806,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItFailsAssignmentFromMessageIfCallsignNotString)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"callsign", 123}, {"airfield", "EGKK"}, {"stand", "55"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"callsign", 123}, {"airfield", "EGKK"}, {"stand", "55"}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1864,12 +1826,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItFailsAssignmentFromMessageIfAirfieldMissing)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"callsign", "BAW123"}, {"stand", "55"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"callsign", "BAW123"}, {"stand", "55"}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1885,12 +1846,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItFailsAssignmentFromMessageIfAirfieldNotString)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"callsign", "BAW123"}, {"airfield", 123}, {"stand", "55"}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"callsign", "BAW123"}, {"airfield", 123}, {"stand", "55"}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1906,16 +1866,15 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItFailsAssignmentFromMessageIfStandMissing)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data",
-                     {
-                         {"callsign", "BAW123"},
-                         {"airfield", "EGKK"},
-                     }}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data",
+                 {
+                     {"callsign", "BAW123"},
+                     {"airfield", "EGKK"},
+                 }}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1931,12 +1890,11 @@ namespace UKControllerPluginTest {
 
         TEST_F(StandEventHandlerTest, ItFailsAssignmentFromMessageIfStandNotString)
         {
-            auto message = InboundMessage::FromJson(
-                nlohmann::json{
-                    {"type", "assign_stand"},
-                    {"version", 1},
-                    {"id", "foo"},
-                    {"data", {{"callsign", "BAW123"}, {"airfield", "EGKK"}, {"stand", 55}}}});
+            auto message = InboundMessage::FromJson(nlohmann::json{
+                {"type", "assign_stand"},
+                {"version", 1},
+                {"id", "foo"},
+                {"data", {{"callsign", "BAW123"}, {"airfield", "EGKK"}, {"stand", 55}}}});
 
             bool successCalled = false;
             std::vector<std::string> failureMessages;
@@ -1954,9 +1912,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2008,14 +1965,13 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"assignment_type", "departure"},
-                        {"latitude", 123},
-                        {"longitude", 456},
-                    })
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"assignment_type", "departure"},
+                    {"latitude", 123},
+                    {"longitude", 456},
+                })
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"stand_id", 3}});
 
@@ -2029,9 +1985,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2083,14 +2038,13 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"assignment_type", "departure"},
-                        {"latitude", 123},
-                        {"longitude", 456},
-                    })
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"assignment_type", "departure"},
+                    {"latitude", 123},
+                    {"longitude", 456},
+                })
                 .WillReturnForbidden();
 
             this->handler.StandSelected(1, "AUTO", {});
@@ -2103,9 +2057,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2157,14 +2110,13 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"assignment_type", "departure"},
-                        {"latitude", 123},
-                        {"longitude", 456},
-                    })
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"assignment_type", "departure"},
+                    {"latitude", 123},
+                    {"longitude", 456},
+                })
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"stand_id", 999}});
 
@@ -2178,9 +2130,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2232,14 +2183,13 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"assignment_type", "departure"},
-                        {"latitude", 123},
-                        {"longitude", 456},
-                    })
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"assignment_type", "departure"},
+                    {"latitude", 123},
+                    {"longitude", 456},
+                })
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"stand_id", "abc"}});
 
@@ -2253,9 +2203,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2307,14 +2256,13 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"assignment_type", "departure"},
-                        {"latitude", 123},
-                        {"longitude", 456},
-                    })
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"assignment_type", "departure"},
+                    {"latitude", 123},
+                    {"longitude", 456},
+                })
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"not_stand_id", 3}});
 
@@ -2328,9 +2276,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2383,9 +2330,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2446,9 +2392,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Ground, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Ground, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGKK", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2509,9 +2454,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2555,13 +2499,12 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"arrival_airfield", "EGGW"},
-                        {"assignment_type", "arrival"},
-                        {"aircraft_type", "B738"}})
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"arrival_airfield", "EGGW"},
+                    {"assignment_type", "arrival"},
+                    {"aircraft_type", "B738"}})
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"stand_id", 3}});
 
@@ -2575,9 +2518,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2621,13 +2563,12 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"arrival_airfield", "EGGW"},
-                        {"assignment_type", "arrival"},
-                        {"aircraft_type", "B738"}})
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"arrival_airfield", "EGGW"},
+                    {"assignment_type", "arrival"},
+                    {"aircraft_type", "B738"}})
                 .WillReturnServerError();
 
             this->handler.StandSelected(1, "AUTO", {});
@@ -2640,9 +2581,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2686,13 +2626,12 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"arrival_airfield", "EGGW"},
-                        {"assignment_type", "arrival"},
-                        {"aircraft_type", "B738"}})
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"arrival_airfield", "EGGW"},
+                    {"assignment_type", "arrival"},
+                    {"aircraft_type", "B738"}})
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"stand_id", 999}});
 
@@ -2706,9 +2645,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2752,13 +2690,12 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"arrival_airfield", "EGGW"},
-                        {"assignment_type", "arrival"},
-                        {"aircraft_type", "B738"}})
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"arrival_airfield", "EGGW"},
+                    {"assignment_type", "arrival"},
+                    {"aircraft_type", "B738"}})
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"stand_id", "abc"}});
 
@@ -2772,9 +2709,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2818,13 +2754,12 @@ namespace UKControllerPluginTest {
             this->ExpectApiRequest()
                 ->Post()
                 .To("stand/assignment/requestauto")
-                .WithBody(
-                    nlohmann::json{
-                        {"callsign", "BAW123"},
-                        {"departure_airfield", "EGKK"},
-                        {"arrival_airfield", "EGGW"},
-                        {"assignment_type", "arrival"},
-                        {"aircraft_type", "B738"}})
+                .WithBody(nlohmann::json{
+                    {"callsign", "BAW123"},
+                    {"departure_airfield", "EGKK"},
+                    {"arrival_airfield", "EGGW"},
+                    {"assignment_type", "arrival"},
+                    {"aircraft_type", "B738"}})
                 .WillReturnCreated()
                 .WithResponseBody(nlohmann::json{{"not_stand_id", 3}});
 
@@ -2838,9 +2773,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Delivery, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport
@@ -2893,9 +2827,8 @@ namespace UKControllerPluginTest {
         {
             // Make "us" the delivery controller
             std::vector<std::shared_ptr<UKControllerPlugin::Ownership::ServiceProvision>> provisions;
-            provisions.push_back(
-                std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
-                    UKControllerPlugin::Ownership::ServiceType::Ground, userCallsign));
+            provisions.push_back(std::make_shared<UKControllerPlugin::Ownership::ServiceProvision>(
+                UKControllerPlugin::Ownership::ServiceType::Ground, userCallsign));
             airfieldOwnership->SetProvidersForAirfield("EGGW", provisions);
 
             // Trigger the menu first to set the last airport

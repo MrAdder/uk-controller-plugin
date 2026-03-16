@@ -275,6 +275,7 @@ namespace UKControllerPlugin::Stands {
 
     void StandEventHandler::SetAssignedStand(const std::string& callsign, int standId)
     {
+        auto mapLock = this->LockStandMap();
         this->standAssignments[callsign] = standId;
         this->standAssignmentTypes[callsign] = StandAssignmentType::STANDARD;
     }
@@ -449,8 +450,7 @@ namespace UKControllerPlugin::Stands {
         this->pilotRequestedAssignmentColour =
             userSettings.GetColourEntry(GeneralSettingsEntries::standPilotRequestedColourKey, RGB(255, 153, 255));
         this->pilotRequestedUnavailableAssignmentColour = userSettings.GetColourEntry(
-            GeneralSettingsEntries::standPilotRequestedUnavailableColourKey,
-            RGB(255, 87, 51));
+            GeneralSettingsEntries::standPilotRequestedUnavailableColourKey, RGB(255, 87, 51));
         this->vaaAssignmentColour =
             userSettings.GetColourEntry(GeneralSettingsEntries::standVaaAssignmentColourKey, RGB(102, 255, 255));
         this->systemAutoAssignmentColour =
