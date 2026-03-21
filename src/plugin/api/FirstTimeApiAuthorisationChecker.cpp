@@ -35,8 +35,8 @@ namespace UKControllerPlugin::Api {
                 if (UKControllerPluginUtils::Http::IsServerError(exception.StatusCode())) {
                     windows.OpenMessageBox(
                         L"Server error whilst checking API authentication, some functionality may not work as "
-                        "expected. If your configuration is otherwise correct, functionality will resume when the "
-                        "service is online again.",
+                        L"expected. If your configuration is otherwise correct, functionality will resume when the "
+                        L"service is online again.",
                         L"UKCP API Server Error",
                         MB_OK | MB_ICONWARNING);
                     return;

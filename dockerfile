@@ -17,13 +17,13 @@ RUN <<-EOF
 	tar -xf xwin.tar.gz
 	mv xwin-*/xwin /usr/local/bin/
 	rm -r xwin.tar.gz xwin-*
+ 
+	apt update && apt install -y --no-install-recommends ca-certificates && apt autoremove -y && apt clean -y
+
+	xwin --accept-license --arch x86 \
+		--crt-version ${WINDOWS_CRT_VERSION} --sdk-version ${WINDOWS_SDK_VERSION} \
+		splat --output /opt/xwin --include-debug-libs
 EOF
-
-RUN apt update && apt install -y --no-install-recommends ca-certificates && apt autoremove -y && apt clean -y
-
-RUN xwin --accept-license --arch x86 \
-	--crt-version ${WINDOWS_CRT_VERSION} --sdk-version ${WINDOWS_SDK_VERSION} \
-	splat --output /opt/xwin --include-debug-libs
 
 RUN <<-EOF
 	set -eux
@@ -110,10 +110,6 @@ RUN <<-EOF
 	cd /tmp
 	tar -xf curl.tar.gz
 	mv curl-* /opt/curl
-EOF
-
-RUN <<-EOF
-	set -eux
 
 	cd /opt/curl
 	sed -ie "s/\\\\xa9/(c)/g" lib/libcurl.rc src/curl.rc # curl/curl#7765

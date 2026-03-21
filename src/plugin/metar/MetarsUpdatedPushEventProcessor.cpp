@@ -39,7 +39,8 @@ namespace UKControllerPlugin::Metar {
             try {
                 this->ProcessMetarsUpdatedJson(this->api.GetAllMetars());
                 LogInfo("Loaded " + std::to_string(this->metars.Count()) + " METARs");
-            } catch (const Api::ApiException&) {
+            } catch (const Api::ApiException& exception) {
+                LogError("Failed to load METARs after plugin event sync: " + std::string(exception.what()));
             }
         });
     }
