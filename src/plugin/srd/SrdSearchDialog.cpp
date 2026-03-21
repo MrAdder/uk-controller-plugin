@@ -251,7 +251,7 @@ namespace UKControllerPlugin::Srd {
         // Do the search and validate the results
         try {
             this->previousSearchResults = this->api.SearchSrd(searchParams);
-        } catch (ApiException e) {
+        } catch (const ApiException& e) {
             LogError("Failed to perform SRD search: " + std::string(e.what()));
         }
 

@@ -104,7 +104,7 @@ namespace UKControllerPluginTest::Headings {
 
     TEST_F(HeadingTest, GreaterThanEqualToReturnsTrueForHeadingEqualToHeading)
     {
-        EXPECT_TRUE(Heading::E >= Heading::E);
+        EXPECT_TRUE(Heading::East >= Heading::E);
     }
 
     TEST_F(HeadingTest, GreaterThanEqualToReturnsFalseForHeadingLessThanHeading)

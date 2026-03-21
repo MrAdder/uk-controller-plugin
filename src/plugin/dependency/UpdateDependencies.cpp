@@ -39,7 +39,7 @@ namespace UKControllerPlugin {
             nlohmann::json dependencyList;
             try {
                 return LoadDependencyList(nlohmann::json::parse(filesystem.ReadFromFile(dependencyListFile)));
-            } catch (std::exception e) {
+            } catch (const std::exception& e) {
                 LogError("Exception thrown when reading dependency list file: " + std::string(e.what()));
             }
 
@@ -69,7 +69,7 @@ namespace UKControllerPlugin {
             try {
                 newDependencies = LoadDependencyList(api.GetDependencyList());
                 LogInfo("Downloaded new dependency list");
-            } catch (ApiException exception) {
+            } catch (const ApiException& exception) {
                 LogError("Unable to download dependency list: " + std::string(exception.what()));
                 return;
             }
@@ -97,7 +97,7 @@ namespace UKControllerPlugin {
                         false);
                     dependencyListToSave.push_back(it->second);
                     LogInfo("New version of dependency " + it->first + " has been downloaded");
-                } catch (ApiException exception) {
+                } catch (const ApiException& exception) {
                     LogError("Unable to download dependency file: " + std::string(exception.what()));
                     continue;
                 }

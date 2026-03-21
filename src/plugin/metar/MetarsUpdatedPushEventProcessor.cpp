@@ -39,7 +39,7 @@ namespace UKControllerPlugin::Metar {
             try {
                 this->ProcessMetarsUpdatedJson(this->api.GetAllMetars());
                 LogInfo("Loaded " + std::to_string(this->metars.Count()) + " METARs");
-            } catch (Api::ApiException) {
+            } catch (const Api::ApiException&) {
             }
         });
     }

@@ -62,7 +62,7 @@ void LogFatalExceptionAndRethrow(const std::string& source, const std::exception
         LogCritical("Exception caught in LogFatalExceptionAndRethrow: " + std::string(e.what()));
     }
 
-    throw;
+    throw std::runtime_error(exceptionMessage);
 }
 
 void LogFatalExceptionAndRethrow(

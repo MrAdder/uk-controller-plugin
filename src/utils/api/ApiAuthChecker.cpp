@@ -27,7 +27,7 @@ namespace UKControllerPlugin {
                     LogInfo("Successfully authenticated with the Web API");
                 }
                 return true;
-            } catch (ApiNotAuthorisedException notAuth) {
+            } catch (const ApiNotAuthorisedException& notAuth) {
                 std::wstring message;
                 message += L"Unable to authenticate with the API. Core functionality will be disabled.\r\n\r\n";
                 message += L"Please go to https://vatsim.uk/ukcp to download your personal access token. \r\n";
@@ -47,7 +47,7 @@ namespace UKControllerPlugin {
                 api.SetApiKey(settings.GetSetting("api-key"));
 
                 return ApiAuthChecker::IsAuthorised(api, windows, settings);
-            } catch (ApiException api) {
+            } catch (const ApiException& api) {
                 // Something weird is going on.
                 std::wstring message;
                 message += L"Unable to access the API. Core functionality will be disabled. \r\n\r\n";

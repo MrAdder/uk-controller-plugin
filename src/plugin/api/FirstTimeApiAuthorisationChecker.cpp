@@ -14,7 +14,7 @@ namespace UKControllerPlugin::Api {
         LogInfo("User elected not to set API key after authentication failure");
         windows.OpenMessageBox(
             L"You have elected not to complete API setup at this time. Some functionality of the plugin "
-            "may not work as expected.",
+            L"may not work as expected.",
             L"UKCP API Config Not Updated",
             MB_OK | MB_ICONWARNING);
     }
@@ -44,8 +44,8 @@ namespace UKControllerPlugin::Api {
 
                 auto messageResponse = windows.OpenMessageBox(
                     L"API authentication failed. Please click OK to open the UK Controller Plugin website in your web "
-                    "browser, log in, and replace your credentials. If this problem persists, please contact the Web "
-                    "Services Department.",
+                    L"browser, log in, and replace your credentials. If this problem persists, please contact the Web "
+                    L"Services Department.",
                     L"UKCP API Config Invalid",
                     MB_OKCANCEL | MB_ICONWARNING);
 

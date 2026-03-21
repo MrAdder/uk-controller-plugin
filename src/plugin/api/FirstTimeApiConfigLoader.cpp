@@ -16,11 +16,11 @@ namespace UKControllerPlugin::Api {
         }
 
         std::wstring message = L"Your web browser will now open and you will be asked to log into the UK "
-                               "Controller Plugin website to set up your API credentials.\n\n";
+                               L"Controller Plugin website to set up your API credentials.\n\n";
         message += L"These credentials allow the plugin to access various data sources and perform certain actions "
-                   "such as assign squawk codes to aircraft.\n\n";
+                   L"such as assign squawk codes to aircraft.\n\n";
         message += L"Skipping this step will mean that many core features of the UK Controller Plugin will not work "
-                   "as expected.";
+                   L"as expected.";
         windows.OpenMessageBox(message.c_str(), L"UK Controller Plugin First Time Setup", MB_OK);
         bool apiKeyReplaced = false;
         dialogManager.OpenDialog(IDD_API_KEY_REPLACE, reinterpret_cast<LPARAM>(&apiKeyReplaced));

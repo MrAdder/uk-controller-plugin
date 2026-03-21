@@ -75,7 +75,7 @@ namespace UKControllerPlugin {
 
                     // Let everyone know that events are synced
                     this->pushEventHandlers.PluginEventsSynced();
-                } catch (Api::ApiException apiException) {
+                } catch (const Api::ApiException& apiException) {
                     LogError("ApiException when syncing plugin events: -" + std::string(apiException.what()));
                     this->lastPollTime = std::chrono::system_clock::now();
                 }
@@ -125,7 +125,7 @@ namespace UKControllerPlugin {
 
                     LogDebug("Plugin events updated, last event id is now " + std::to_string(this->lastEventId));
 
-                } catch (Api::ApiException apiException) {
+                } catch (const Api::ApiException& apiException) {
                     LogError("ApiException when getting latest plugin events: " + std::string(apiException.what()));
                 }
                 this->lastPollTime = std::chrono::system_clock::now();

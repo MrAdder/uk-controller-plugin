@@ -87,7 +87,7 @@ UKCP_LOADER_API void EuroScopePlugInInit(EuroScopePlugIn::CPlugIn** ppPlugInInst
         }
         *ppPlugInInstance = pluginInstance;
         UKControllerPluginUtils::EventHandler::MutableEventBus::Reset();
-    } catch (std::exception e) {
+    } catch (const std::exception&) {
         UKControllerPluginUtils::EventHandler::MutableEventBus::Reset();
         ShutdownLogger();
         throw;
