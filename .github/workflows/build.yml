@@ -7,6 +7,9 @@ on:
       - "alpha"
       - "beta"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
 
 jobs:
   build:
@@ -37,6 +40,14 @@ jobs:
 
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Configure sccache
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "SCCACHE_IDLE_TIMEOUT=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # cURL
       - name: Cache cURL
@@ -73,29 +84,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "16"
-
-      - name: Get Yarn Cache Directory
-        id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
-
-      - name: Load Yarn Cache
-        uses: actions/cache@v5
-        id: yarn-cache
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Load Cached Node Modules
-        uses: actions/cache@v5
-        with:
-          path: "**/node_modules"
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/yarn.lock') }}
+          cache: yarn
+          cache-dependency-path: "**/yarn.lock"
 
       # Install yarn things
       - name: Install Assets
-        run: yarn
+        run: yarn --frozen-lockfile
 
       - name: Setup Build Version
         env:
@@ -108,6 +102,8 @@ jobs:
           CFLAGS: -m32
           CXX: clang-cl
           CXXFLAGS: -m32
+          CMAKE_C_COMPILER_LAUNCHER: sccache
+          CMAKE_CXX_COMPILER_LAUNCHER: sccache
         run: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -G Ninja -Bbuild
 
       # Run the build and tests
@@ -119,6 +115,9 @@ jobs:
         working-directory: build
         run: |
           ctest -C Release --output-on-failure --no-tests=error
+
+      - name: Show sccache stats
+        run: sccache --show-stats
 
       # Do Srclinting
       - name: Get Changed Files (Src)
@@ -202,29 +201,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "16"
-
-      - name: Get Yarn Cache Directory
-        id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
-
-      - name: Load Yarn Cache
-        uses: actions/cache@v5
-        id: yarn-cache
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-
-      - name: Load Cached Node Modules
-        uses: actions/cache@v5
-        with:
-          path: "**/node_modules"
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('**/yarn.lock') }}
+          cache: yarn
+          cache-dependency-path: "**/yarn.lock"
 
       # Install yarn things
       - name: Install Assets
-        run: yarn
+        run: yarn --frozen-lockfile
 
       # Download build artifacts
       - name: Download Core Binary
